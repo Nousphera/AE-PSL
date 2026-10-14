@@ -171,3 +171,9 @@ If you find this repository useful in your research, please cite:
       url={https://arxiv.org/abs/2607.17913}, 
 }
 ```
+<!-- nousphera-project-resources -->
+## Project resources
+
+[Project page](https://nousphera.github.io/AE_PSL/) · [Research overview](https://nousphera.github.io/projects/ae-psl/) · [A0 poster](https://nousphera.github.io/AE_PSL/poster.pdf) · [Paper](https://arxiv.org/abs/2607.17913)
+
+This repository contains the research implementation. The project page and poster summarize the published method and reported experiments; this documentation update does not claim an independent reproduction of those experiments.
