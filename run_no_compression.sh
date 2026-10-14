@@ -8,7 +8,7 @@ AE_WEIGHTS="$PROJECT_DIR/data/ae_checkpoints"
 EXP_DIR="$PROJECT_DIR/data/experiments"
 
 # Runs a sweep over datasets where the AE is bypassed, i.e. R=1
-python3 src/orchestrator.py \
+python3 -m ae_psl.orchestrator \
 --model vit_b_32 \
 --dataset cifar100 food101 sun397 femnist \
 --batch_size 125 \

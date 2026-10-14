@@ -9,7 +9,7 @@ EXP_DIR="$PROJECT_DIR/data/experiments"
 
 # Runs experiments for the different design choices. See paper for more details on GA, CSA and FZ
 # Randomly initialized AE
-python3 src/orchestrator.py \
+python3 -m ae_psl.orchestrator \
 --ae_general_alignment false \
 --client_specific_alignment false \
 --ae_freeze_encoder_during_finetuning false \
@@ -32,7 +32,7 @@ python3 src/orchestrator.py \
 --experiments_dir $EXP_DIR
 
 # AE trained using General Alignment
-python3 src/orchestrator.py \
+python3 -m ae_psl.orchestrator \
 --ae_general_alignment true \
 --client_specific_alignment false \
 --ae_freeze_encoder_during_finetuning false \
@@ -55,7 +55,7 @@ python3 src/orchestrator.py \
 --experiments_dir $EXP_DIR
 
 # AE trained using General Alignment and freezing during DFT
-python3 src/orchestrator.py \
+python3 -m ae_psl.orchestrator \
 --ae_general_alignment true \
 --client_specific_alignment false \
 --ae_freeze_encoder_during_finetuning true \
@@ -78,7 +78,7 @@ python3 src/orchestrator.py \
 --experiments_dir $EXP_DIR
 
 # AE trained using General Alignment, Client Specific Alignment and freezing during DFT (AE-PSL)
-python3 src/orchestrator.py \
+python3 -m ae_psl.orchestrator \
 --ae_general_alignment true \
 --client_specific_alignment true \
 --ae_freeze_encoder_during_finetuning true \

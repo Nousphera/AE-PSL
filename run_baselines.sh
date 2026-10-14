@@ -10,7 +10,7 @@ EXP_DIR="$PROJECT_DIR/data/experiments"
 # Runs a sweep over different AE latent dimensions (corresponding to R=5,10,20), all datasets and number of clients. (Sec 5.3.1)
 
 # Rand Top K
-python3 src/orchestrator.py \
+python3 -m ae_psl.orchestrator \
 --model vit_b_32 \
 --dataset cifar100 food101 sun397 femnist \
 --batch_size 125 \
@@ -30,7 +30,7 @@ python3 src/orchestrator.py \
 
 # C3-SL
 # compression ratio also accounts for additional communication induced by leaving the CLS token uncompressed. Thus resulting in roughly R=5,10,20 for all methods.
-python3 src/orchestrator.py \
+python3 -m ae_psl.orchestrator \
 --model vit_b_32 \
 --dataset cifar100 food101 sun397 femnist \
 --batch_size 125 \
@@ -51,7 +51,7 @@ python3 src/orchestrator.py \
 # ADC
 # In the code, the sqrt of adc_compression_ratio is taken, resulting in the batch and token compression ratio (which is inverted for ADC).
 # CLS token is compressed as this led to increased performance.
-python3 src/orchestrator.py \
+python3 -m ae_psl.orchestrator \
 --model vit_b_32 \
 --dataset cifar100 food101 sun397 femnist \
 --batch_size 125 \

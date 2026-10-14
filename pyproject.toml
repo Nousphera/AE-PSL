@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ae-psl"
+version = "0.1.0"
+description = "Autoencoder-compressed parallel split learning with reproducible three-stage training"
+readme = "readme.md"
+requires-python = ">=3.11,<3.14"
+license = {file = "LICENSE"}
+authors = [{name="Bas Meuwissen"}, {name="Vasileios Tsouvalas"}, {name="Nirvana Meratnia"}]
+dependencies = ["torch>=2.8,<2.9", "torchvision>=0.23,<0.24", "numpy>=2.2,<3", "tqdm>=4.67,<5"]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<10"]
+femnist = ["datasets>=3.6,<4", "flwr-datasets==0.6.0"]
+plots = ["matplotlib>=3.10,<4", "pandas>=2.3,<3"]
+baselines = ["kmeans-pytorch==0.3"]
+dino = ["timm>=1.0,<2"]
+
+[project.scripts]
+ae-psl-smoke = "ae_psl.smoke:main"
+ae-psl = "ae_psl.orchestrator:main"
+
+[project.urls]
+Paper = "https://arxiv.org/abs/2607.17913"
+Project = "https://nousphera.github.io/AE_PSL/"
+Source = "https://github.com/Nousphera/AE_PSL"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["ae_psl*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -8,7 +8,7 @@ AE_WEIGHTS="$PROJECT_DIR/data/ae_checkpoints"
 EXP_DIR="$PROJECT_DIR/data/experiments"
 
 # Runs a sweep over different AE architectures (Sec 5.3.3)
-python3 src/orchestrator.py \
+python3 -m ae_psl.orchestrator \
 --model vit_b_32 \
 --dataset food101 \
 --batch_size 125 \

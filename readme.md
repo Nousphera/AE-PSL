@@ -1,179 +1,39 @@
-# AutoEncoder-Compressed Parallel Split Learning for Pre-trained Model Fine-Tuning
+# AE-PSL
 
-**AE-PSL** is a communication-efficient Parallel Split Learning (PSL) framework for distributed fine-tuning of pre-trained foundation models on resource-constrained edge devices.
+**AutoEncoder-Compressed Parallel Split Learning for Pre-Trained Model Fine-Tuning**
 
-Instead of relying on heuristic communication compression (e.g., quantization or sparsification), **AE-PSL** uses a lightweight **AutoEncoder (AE)** to compress intermediate activations and gradients exchanged between clients and the server. To ensure compatibility with off-the-shelf pre-trained models, AE-PSL introduces a **two-stage alignment procedure** that adapts the autoencoder to both the pre-trained feature manifold and client-specific feature distributions before distributed fine-tuning.
+Bas Meuwissen · Vasileios Tsouvalas · Nirvana Meratnia
 
-Extensive experiments on four vision benchmarks demonstrate that AE-PSL achieves a significantly better accuracy–communication trade-off than existing heuristic compression methods.
+[Paper](https://arxiv.org/abs/2607.17913) · [Project](https://nousphera.github.io/AE_PSL/) · [Reproducibility](REPRODUCIBILITY.md) · [Provenance](PROVENANCE.md)
 
----
+AE-PSL compresses patch-token activations and their gradients at a ViT split point. General alignment (GA) learns an autoencoder on public features; client-specific alignment (CSA) adapts local encoders and averages decoders; distributed fine-tuning (DFT) freezes the autoencoders while training LoRA adapters and the classifier. CLS tokens travel uncompressed.
 
-## Paper
+This release contains the original experiment implementation, corrected training paths, and a bounded CPU integration run. It uses serialized boundaries in one process. Detached client logits return explicit logit gradients for the server backward pass; those extra bytes are included. Scalar losses alone cannot provide those gradients. This correction and the distinction from the paper's communication claims are detailed in [Reproducibility](REPRODUCIBILITY.md#transport-and-claims).
 
-**AutoEncoder-Compressed Parallel Split Learning for Pre-trained Model Fine-Tuning**  
-*[Bas Meuwissen](www.linkedin.com/in/bas-meuwissen), Vasileios Tsouvalas and Nirvana Meratnia*
+## Install and run
 
-*ECML-PKDD 2026, 4th Workshop on Advancements in Federated Learning*
-
-**Paper:**
-
-[Read the pre-print on arXiv](https://arxiv.org/abs/2607.17913)
-
----
-
-## Installation
-
-Code has been tested with **Python 3.10**.
-
-<details>
-<summary><strong>Clone the repository and create a virtual environment</strong></summary>
-
-Clone the repository:
+Use Python 3.11–3.13 in an isolated environment. The tested CPU environment is Python 3.12, PyTorch 2.8 and torchvision 0.23.
 
 ```bash
-git clone <repository-url>
-cd AE_PSL
-```
-
-Create a virtual environment:
-
-**Linux / macOS**
-
-```bash
-python3 -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate
+python -m pip install -c constraints-tested.txt '.[test]'
+python -m pytest -q
+ae-psl-smoke --seed 42 --output results/smoke.json
 ```
 
-**Windows (PowerShell)**
+The smoke run downloads nothing. It trains a real, randomly initialized two-block ViT through GA → CSA → DFT on small synthetic image datasets. It verifies frozen weights and gradient flow, then evaluates both global (AE bypassed) and local (AE active) models. The JSON records configuration, dependency versions, metrics, communication, and a model-state digest. A matching NPZ contains all client/server model tensors and loads with `numpy.load(path, allow_pickle=False)`. Existing outputs are refused; checkpoints are for inspection/inference, not optimizer-resume training. Synthetic accuracy is **not a paper benchmark**.
 
-```powershell
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-```
-
-
-</details>
-
-
-Install the project dependencies:
+## Paper experiments
 
 ```bash
-pip install -r requirements.txt
+# Supply ImageNet100 first; see the required layout and limitations below.
+ae-psl --dataset cifar100 --model vit_b_32 --nr_of_clients 5 \
+  --batch_size 125 --nr_of_epochs 10 --split_layer 5 \
+  --ae_latent_dim 24 64 140 --random_seed 42 43 44 \
+  --save_final_model true --experiment_name cifar100_three_seeds
 ```
 
+This is a large experiment sweep, with 30 GA epochs and one CSA epoch by default. Torchvision downloads the named pretrained ViT weights and CIFAR-100 when needed. [Dataset preparation, FEMNIST installation, configuration, and evaluation details](REPRODUCIBILITY.md#datasets-and-experiments) include the fixed SUN397 split and ImageNet100 class-list limitation. `ae-psl --help` lists the full configuration; existing `run_*.sh` scripts use the installed module. Optional audio research files are retained for provenance and are outside this vision release's supported scope.
 
----
-
-## Datasets
-
-Place all datasets under
-
-```text
-./data/torch
-```
-
-This is the default location, but another dataset directory can be specified through the experiment configuration.
-
-### Supported datasets
-
-| Dataset | Download |
-|---------|----------|
-| CIFAR100 | Automatically downloaded via PyTorch |
-| Food101 | Automatically downloaded via PyTorch |
-| SUN397 | Automatically downloaded via PyTorch |
-| FEMNIST | https://huggingface.co/datasets/flwrlabs/femnist |
-| ImageNet100 | https://www.kaggle.com/datasets/ambityga/imagenet100 |
-
-### Notes
-
-- **ImageNet100** is used by default during the **AE General Alignment** stage.
-- The training **batch size must be divisible by the number of clients**.
-- When using **FEMNIST**, local evaluation is automatically enabled. See the paper for details on local versus global evaluation.
-
----
-
-## Running Experiments
-
-All experiments are launched through
-
-```bash
-python orchestrator.py
-```
-
-with the desired command-line arguments.
-
-Several example configurations are provided as shell scripts.
-
-### Basic Example
-
-```bash
-bash run_basic_example.sh
-```
-
----
-
-## Reproducing Paper Results
-
-#### Main Results (Section 5.3.1)
-
-```bash
-bash run_main_results.sh
-```
-
-Baseline comparisons:
-
-```bash
-bash run_baselines.sh
-```
-
-#### Computational Overhead (Section 5.3.2)
-
-Enable FLOP profiling by adding
-
-```bash
---profile_flops true
-```
-
-to any experiment.
-
-#### AE Architecture Study (Section 5.3.3)
-
-```bash
-bash run_ae_architecture.sh
-```
-
-#### Ablation Study (Section 5.3.4)
-
-```bash
-bash run_ablation.sh
-```
-
-#### No Compression Baseline (R = 1)
-
-```bash
-bash run_no_compression.sh
-```
-
----
-
-## Citation
-
-If you find this repository useful in your research, please cite:
-
-```bibtex
-@misc{meuwissen2026autoencodercompressedparallelsplitlearning,
-      title={AutoEncoder-Compressed Parallel Split Learning for Pre-trained Model Fine-Tuning}, 
-      author={Bas Meuwissen and Vasileios Tsouvalas and Nirvana Meratnia},
-      year={2026},
-      eprint={2607.17913},
-      archivePrefix={arXiv},
-      primaryClass={cs.DC},
-      url={https://arxiv.org/abs/2607.17913}, 
-}
-```
-<!-- nousphera-project-resources -->
-## Project resources
-
-[Project page](https://nousphera.github.io/AE_PSL/) · [Research overview](https://nousphera.github.io/projects/ae-psl/) · [A0 poster](https://nousphera.github.io/AE_PSL/poster.pdf) · [Paper](https://arxiv.org/abs/2607.17913)
-
-This repository contains the research implementation. The project page and poster summarize the published method and reported experiments; this documentation update does not claim an independent reproduction of those experiments.
+Code is distributed under the repository's existing [MIT license](LICENSE). Please cite [CITATION.cff](CITATION.cff).

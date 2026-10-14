@@ -8,7 +8,7 @@ AE_WEIGHTS="$PROJECT_DIR/data/ae_checkpoints"
 EXP_DIR="$PROJECT_DIR/data/experiments"
 
 # Runs a sweep over different AE latent dimensions (corresponding to R=20,10,5)
-python3 src/orchestrator.py \
+python3 -m ae_psl.orchestrator \
 --model vit_b_32 \
 --dataset cifar100 \
 --batch_size 125 \

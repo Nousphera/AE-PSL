@@ -8,7 +8,7 @@ AE_WEIGHTS="$PROJECT_DIR/data/ae_checkpoints"
 EXP_DIR="$PROJECT_DIR/data/experiments"
 
 # Runs a sweep over different AE latent dimensions (corresponding to R=5,10,20), all datasets and number of clients. (Sec 5.3.1)
-python3 src/orchestrator.py \
+python3 -m ae_psl.orchestrator \
 --model vit_b_32 \
 --dataset cifar100 food101 sun397 femnist \
 --batch_size 125 \
