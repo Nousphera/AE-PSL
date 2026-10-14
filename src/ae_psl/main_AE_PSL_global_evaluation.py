@@ -20,6 +20,7 @@ from ae_psl.utils.dataloader_utils import get_distributed_dataloaders_from_datas
 from ae_psl.utils.fl_utils import fed_avg, get_client_weight_multipliers__nr_of_elements
 from ae_psl.utils.model_saving_utils import save_split_model, save_experiment_results, \
     load_split_model, delete_model, save_combined_experiment_results
+from ae_psl.utils.model_saving_utils import save_pretrain_only_results
 from ae_psl.utils.mpsl_utils import compute_mini_batch_size
 from ae_psl.utils.scheduler_utils import get_optimizer_and_scheduler, get_optimzer_and_scheduler_for_seperate_ae_finetuning
 
@@ -54,6 +55,14 @@ def finetune_mpsl(global_args, device, server_model, client_models, trainer,
     # Initialize ExperimentResults
     experiment_results = ExperimentResults(validation_mode=validation_mode)
     experiment_results.params = search_space_args
+    experiment_results.requested_epochs = global_args['nr_of_epochs']
+    if experiment_results.requested_epochs < 1:
+        raise ValueError('Fine-tuning requires at least one epoch')
+    if validation_mode != 'none' and not val_dataloader:
+        raise ValueError('Validation mode requires a nonempty held-out validation loader')
+    best_name = global_args['save_file_name'] + '.best'
+    latest_name = global_args['save_file_name'] + '.latest'
+
 
     # Validation State Variables
     best_val_loss = float('inf')
@@ -145,6 +154,7 @@ def finetune_mpsl(global_args, device, server_model, client_models, trainer,
 
         print(f'Epoch {epoch_nr} --- Train --- Loss: {train_loss:.3f} - Acc: {train_acc * 100.0:.2f}%')
 
+        experiment_results.last_completed_epoch = epoch_nr
         server_scheduler.step()
 
         # --- Aggregation ---
@@ -153,7 +163,7 @@ def finetune_mpsl(global_args, device, server_model, client_models, trainer,
 
         # --- Regular Checkpointing ---
         if global_args['save_model_after_each_epoch']:
-            save_split_model(aggregated_client_model, server_model, global_args['save_file_name'])
+            save_split_model(aggregated_client_model, server_model, latest_name)
 
         # --- Validation & Testing ---
         with torch.no_grad():
@@ -169,9 +179,10 @@ def finetune_mpsl(global_args, device, server_model, client_models, trainer,
                 # Check for improvement
                 if val_loss < best_val_loss:
                     best_val_loss = val_loss
+                    experiment_results.best_validation_epoch = epoch_nr
                     patience_counter = 0
                     # print(f"Validation loss improved to {best_val_loss:.6f}. Saving model...")
-                    save_split_model(aggregated_client_model, server_model, global_args['save_file_name'])
+                    save_split_model(aggregated_client_model, server_model, best_name)
                 else:
                     patience_counter += 1
                     if validation_mode == 'early_stopping':
@@ -180,6 +191,7 @@ def finetune_mpsl(global_args, device, server_model, client_models, trainer,
 
                 if validation_mode == 'early_stopping' and patience_counter >= early_stopping_patience:
                     print(f"Early stopping triggered after {epoch_nr} epochs.")
+                    experiment_results.stopped_early = True
                     break
 
             # Option 2: No Validation (Legacy / Standard Behavior)
@@ -198,33 +210,24 @@ def finetune_mpsl(global_args, device, server_model, client_models, trainer,
 
     print(f'Finished training phase.')
 
-    # --- Final Test Evaluation ---
-    # If early saving/stopping was used, reload the best model
+    # Restore the isolated best snapshot; missing checkpoints are an error.
     if validation_mode in ['early_saving', 'early_stopping']:
-        print("Loading best model for final testing...")
-        try:
-            # Load weights into the aggregated model and server model
-            load_split_model(aggregated_client_model, server_model, device, global_args['save_file_name'])
-        except FileNotFoundError:
-            print("Warning: Best model file not found. Using current weights.")
+        load_split_model(aggregated_client_model, server_model, device, best_name)
 
     print('Starting Final Test Set Evaluation')
     with torch.no_grad():
         final_test_loss, final_test_acc = trainer.test_epoch_global_evaluation(aggregated_client_model, server_model, test_dataloader, device,
                                                  None, global_args['nr_of_epochs'],
                                                  use_gpu_transform, global_args['use_compression_during_global_eval'])
-        # experiment_results.final_test_loss = final_test_loss
+        experiment_results.final_test_loss = final_test_loss
         experiment_results.final_test_accuracy = final_test_acc
         print(f"Final Test Metrics --- Loss: {final_test_loss:.3f} - Acc: {final_test_acc * 100.0:.2f}%")
 
-    # --- Final Model Management ---
+    # The final name always denotes the evaluated model; latest remains separate.
+    if global_args['save_final_model']:
+        save_split_model(aggregated_client_model, server_model, global_args['save_file_name'])
     if validation_mode in ['early_saving', 'early_stopping']:
-        if not global_args['save_final_model']:
-            # Delete the intermediate best model if user didn't request final model save
-            delete_model(global_args['save_file_name'])
-    else:
-        if global_args['save_final_model']:
-            save_split_model(aggregated_client_model, server_model, global_args['save_file_name'])
+        delete_model(best_name)
 
     return experiment_results
 
@@ -281,6 +284,7 @@ def run_2_stage_mpsl(global_args: dict, search_space_args: dict):
 
         if global_args.get('ae_pretrain_only', False):
             print("Skipping fine-tuning as ae_pretrain_only is set to true")
+            save_pretrain_only_results(ae_pretrain_results, global_args, global_args['save_file_name'])
             return
     else:
         print("Using Heuristic Compression. Skipping AE pre-training.")

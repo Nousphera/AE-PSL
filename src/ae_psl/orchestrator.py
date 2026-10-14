@@ -15,6 +15,8 @@ import traceback
 
 from ae_psl.calculate_computation_overhead import compute_flops
 from ae_psl.main_AE_PSL_global_evaluation import run_2_stage_mpsl
+from ae_psl.utils.file_utils import save_object_to_json
+from ae_psl.utils.campaign_state import completed_result, last_recorded_epoch
 def run_2_stage_mpsl_personalized(*args, **kwargs):
     from ae_psl.main_AE_PSL_local_evaluation import run_2_stage_mpsl_personalized as run
     return run(*args, **kwargs)
@@ -99,8 +101,7 @@ def generate_manifest(experiment_name, experiments_dir, global_args, search_spac
     }
 
     manifest_path = os.path.join(campaign_dir, "manifest.json")
-    with open(manifest_path, 'w') as f:
-        json.dump(manifest, f, indent=4)
+    save_object_to_json(manifest, manifest_path)
 
     print(f"Initialized Campaign: {campaign_dir}")
     print(f"Generated {len(jobs)} jobs ({len(seeds)} seeds x {len(grid_combinations)} configs).")
@@ -142,8 +143,7 @@ def run_orchestrator(args: Namespace):
     # 1. Setup Campaign (New or Resume)
     if args.resume_from_manifest:
         if not os.path.exists(args.resume_from_manifest):
-            print(f"Error: Manifest file not found at {args.resume_from_manifest}")
-            return
+            raise FileNotFoundError(args.resume_from_manifest)
 
         print(f"Resuming campaign from: {args.resume_from_manifest}")
         with open(args.resume_from_manifest, 'r') as f:
@@ -202,8 +202,8 @@ def run_orchestrator(args: Namespace):
         # Note: save_experiment_results appends '.json'
         expected_output_file = save_file_path + ".json"
 
-        if os.path.exists(expected_output_file):
-            print(f"[{i + 1}/{total_jobs}] SKIPPING: {filename} (Result exists)")
+        if completed_result(expected_output_file, current_run_args):
+            print(f"[{i + 1}/{total_jobs}] SKIPPING: {filename} (Verified complete result)")
             continue
 
 
@@ -213,6 +213,9 @@ def run_orchestrator(args: Namespace):
         print(f"   Params: {job_params}")
 
         try:
+            status_path = save_file_path + '.status.json'
+            save_object_to_json({'state': 'running', 'requested_epochs': current_run_args['nr_of_epochs'],
+                                 'last_completed_epoch': -1}, status_path)
             # Execute the training stage directly
             # This handles AE pre-training/loading internally
 
@@ -225,13 +228,22 @@ def run_orchestrator(args: Namespace):
             else:
                 run_2_stage_mpsl(current_run_args, job_params)
 
+            completion = completed_result(expected_output_file, current_run_args)
+            if completion is None:
+                raise RuntimeError('Job returned without a complete, saved final result')
+            save_object_to_json(completion, status_path)
+
         except KeyboardInterrupt:
             print("\nOrchestrator interrupted by user.")
-            break
+            save_object_to_json({'state': 'interrupted', 'last_completed_epoch':
+                                 last_recorded_epoch(expected_output_file)}, status_path)
+            raise
         except Exception as e:
             print(f"!!! JOB FAILED: {filename}")
             print(f"Error: {e}")
             traceback.print_exc()
+            save_object_to_json({'state': 'failed', 'last_completed_epoch':
+                                 last_recorded_epoch(expected_output_file), 'error': str(e)}, status_path)
             failed_jobs.append(filename)
             # We continue to the next job instead of crashing the whole campaign
             # continue

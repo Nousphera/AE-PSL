@@ -39,8 +39,9 @@ def get_auto_encoder(global_args, base_model, device, full_dataset : Distributed
         'training': {key: value for key, value in global_args.items()
                      if key.startswith('ae_pretrain_') or key in ('val_mode','val_split','small_test_run')},
         'backbone_sha256': backbone_fingerprint(base_model),
-        'dataset_root': os.path.abspath(os.environ.get('TORCH_DATA_DIR', 'data/torch')),
-        'cache_schema': 2,
+        'dataset_root': os.path.abspath(os.environ.get('TORCH_DATA_DIR', 'data/datasets')),
+        'cache_schema': 3,
+        'uses_supplied_train_split': full_dataset is not None,
 
     }
 
@@ -80,12 +81,15 @@ def get_auto_encoder(global_args, base_model, device, full_dataset : Distributed
         print(f"Note: AE pre-training on separate pre-train dataset: {global_args['ae_pretrain_dataset']}")
 
 
-    full_dataset = available_datasets.load_data(name=global_args['ae_pretrain_dataset'], num_partitions=1,
-                                                split='iid', seed=global_args['random_seed'],
-                                                global_args=global_args)
+    if full_dataset is None:
+        full_dataset = available_datasets.load_data(name=global_args['ae_pretrain_dataset'], num_partitions=1,
+                                                    split='iid', seed=global_args['random_seed'],
+                                                    global_args=global_args)
 
 
-    train_dataset = full_dataset.load_partition(partition_id=0)
+    # A supplied downstream dataset already excludes its validation subset.
+    # Use every client's training examples, not only partition zero.
+    train_dataset = full_dataset.train_ds if hasattr(full_dataset, 'train_ds') else full_dataset.load_partition(partition_id=0)
     test_dataset = full_dataset.load_test_set()
 
     if global_args['small_test_run']:

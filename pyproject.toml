@@ -7,7 +7,7 @@ name = "ae-psl"
 version = "0.1.0"
 description = "Autoencoder-compressed parallel split learning with reproducible three-stage training"
 readme = "readme.md"
-requires-python = ">=3.11,<3.14"
+requires-python = ">=3.12,<3.14"
 license = {file = "LICENSE"}
 authors = [{name="Bas Meuwissen"}, {name="Vasileios Tsouvalas"}, {name="Nirvana Meratnia"}]
 dependencies = ["torch>=2.8,<2.9", "torchvision>=0.23,<0.24", "numpy>=2.2,<3", "tqdm>=4.67,<5"]

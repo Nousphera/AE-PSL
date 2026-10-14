@@ -1,5 +1,8 @@
 import numpy as np
 import json
+import os
+from pathlib import Path
+import tempfile
 
 
 def read_file_as_single_string(file_path, encoding):
@@ -27,13 +30,21 @@ def save_file(file_path, content, mode='w'):
 
 
 def save_object_to_json(_object, filename):
+    """Atomically replace a JSON record; failures preserve its previous contents."""
+    path = Path(filename)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
     try:
-        with open(filename, 'w') as file:
-            json.dump(_object, file, indent=4)
-    except Exception as error:
-        print(f'Error occurred in save_object_to_json: {error}')
-
-        raise error
+        with tempfile.NamedTemporaryFile(mode='w', dir=path.parent, prefix=f'.{path.name}.',
+                                         suffix='.tmp', delete=False) as file:
+            temporary = Path(file.name)
+            json.dump(_object, file, indent=4, allow_nan=False)
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def load_object_from_json(filename):

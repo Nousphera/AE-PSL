@@ -16,7 +16,9 @@ def _save_object(obj, file_name):
 
     file_name = f'{file_name}.pth'
 
-    torch.save(obj, os.path.join(os.environ['MODEL_WEIGHTS_DIR'], file_name))
+    path = Path(os.environ['MODEL_WEIGHTS_DIR']) / file_name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(obj, path)
     # print(f'Saved model in filename: {file_name}')
 
 def _delete_object(file_name):
@@ -39,7 +41,7 @@ def _load_checkpoint(file_name, device):
         raise Exception('file_name should not be None or an empty string.')
 
     file_name = f'{file_name}.pth'
-    checkpoint = torch.load(os.path.join(os.environ['MODEL_WEIGHTS_DIR'], file_name), map_location=device)
+    checkpoint = torch.load(os.path.join(os.environ['MODEL_WEIGHTS_DIR'], file_name), map_location=device, weights_only=True)
 
     return checkpoint
 
@@ -105,9 +107,8 @@ def load_federated_model(aggregated_model, client_models: dict, device, checkpoi
 
     aggregated_model.load_state_dict(checkpoint[AGGREGATED_MODEL_NAME])
 
-    for idx in range(len(client_models)):
-        if idx in client_models:
-            client_models[idx].load_state_dict(checkpoint[get_client_name(idx)])
+    for client_id, model in client_models.items():
+        model.load_state_dict(checkpoint[get_client_name(client_id)])
 
     return aggregated_model, client_models
 
@@ -171,7 +172,13 @@ def save_combined_experiment_results(experiment_results, ae_results, search_spac
     combined_data = {
         "params": search_space_args,
         "finetune_results": experiment_results.to_json(),
-        "ae_pretrain_results": ae_results
+        "ae_pretrain_results": ae_results,
+        "completion": {
+            "state": "completed", "stage": "dft",
+            "requested_epochs": experiment_results.requested_epochs,
+            "last_completed_epoch": experiment_results.last_completed_epoch,
+            "stopped_early": experiment_results.stopped_early,
+        },
     }
 
     # 3. Save the combined object
@@ -187,3 +194,30 @@ def save_ae_experiment_results(experiment_results: ExperimentResultsAE, filename
         full_file_path = os.path.join(os.environ['AE_WEIGHTS_DIR'], filename, 'results.json')
 
         save_object_to_json(experiment_results.to_json(), full_file_path)
+
+def save_personalized_model(client_models, server_model, desired_file_name):
+    _save_object({
+        'client_models': {cid: model.state_dict() for cid, model in client_models.items()},
+        'server_model': server_model.state_dict(),
+    }, desired_file_name)
+
+
+def load_personalized_model(client_models, server_model, device, checkpoint_file_name):
+    checkpoint = _load_checkpoint(checkpoint_file_name, device)
+    if set(checkpoint['client_models']) != set(client_models):
+        raise ValueError('Checkpoint client IDs do not match the personalized models')
+    for cid, model in client_models.items():
+        model.load_state_dict(checkpoint['client_models'][cid])
+    server_model.load_state_dict(checkpoint['server_model'])
+    return client_models, server_model
+
+
+def save_pretrain_only_results(ae_results, global_args, desired_file_name):
+    save_object_to_json({
+        'ae_pretrain_results': ae_results,
+        'completion': {
+            'state': 'completed', 'stage': 'ga-only',
+            'requested_epochs': global_args['ae_pretrain_epochs'],
+            'last_completed_epoch': max(ae_results.get('epochs', []), default=-1),
+        },
+    }, os.path.join(os.environ['MODEL_WEIGHTS_DIR'], desired_file_name + '.json'))

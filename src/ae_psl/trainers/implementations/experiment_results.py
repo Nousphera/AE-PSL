@@ -4,6 +4,10 @@ from typing import List, Dict
 class ExperimentResults:
     def __init__(self, validation_mode):
         self.epochs: List[int] = []
+        self.last_completed_epoch = -1
+        self.requested_epochs = 0
+        self.stopped_early = False
+        self.best_validation_epoch = None
         self.train_metric = []
         self.test_metric = []
         self.final_test_loss: float = -1
@@ -64,6 +68,10 @@ class ExperimentResults:
 
     def to_json(self):
         return {
+            "last_completed_epoch": self.last_completed_epoch,
+            "requested_epochs": self.requested_epochs,
+            "stopped_early": self.stopped_early,
+            "best_validation_epoch": self.best_validation_epoch,
             "final_test_loss": self.final_test_loss,
             "final_test_accuracy": self.final_test_accuracy,
             "epochs": self.epochs,

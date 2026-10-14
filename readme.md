@@ -12,7 +12,7 @@ This release contains the original experiment implementation, corrected training
 
 ## Install and run
 
-Use Python 3.11–3.13 in an isolated environment. The tested CPU environment is Python 3.12, PyTorch 2.8 and torchvision 0.23.
+Use Python 3.12–3.13 in an isolated environment. The tested CPU environment is Python 3.12, PyTorch 2.8 and torchvision 0.23.
 
 ```bash
 python3.12 -m venv .venv

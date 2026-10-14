@@ -317,13 +317,13 @@ class SASLTrainer(ExperimentTrainer):
                 y_for_client = y_per_client[client_id]
 
                 c_loss = loss_fn(preds_for_client, y_for_client)
-                client_loss_fn_tuples.append((c_loss, len(y_for_client)))
 
                 # Loss and gradient are computed on the detached, client-local logits.
                 local_gradient = torch.autograd.grad(c_loss, preds_for_client)[0]
                 weighted_gradient = local_gradient * len(y_for_client) / len(predictions)
                 logit_gradients[client_id], gradient_bytes = transmit(weighted_gradient)
                 scalar_loss, loss_bytes = transmit(c_loss)
+                client_loss_fn_tuples.append((scalar_loss, len(y_for_client)))
                 # Exact message bytes, including required logit-gradient uplink.
                 client_incoming_communication_sizes[client_id] += prediction_bytes
                 server_outgoing_communication_size += prediction_bytes
