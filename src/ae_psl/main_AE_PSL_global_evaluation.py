@@ -233,6 +233,7 @@ def finetune_mpsl(global_args, device, server_model, client_models, trainer,
 
 
 def run_2_stage_mpsl(global_args: dict, search_space_args: dict):
+    global_args = models.resolve_compression_config(global_args)
     set_random_seed(global_args['random_seed'])
     set_env_variables(global_args)
 

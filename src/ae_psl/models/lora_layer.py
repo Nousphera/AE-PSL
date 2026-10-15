@@ -3,7 +3,6 @@ import math
 import torch
 from torch import nn
 
-# TODO: check for correctness
 class LoRALinear(nn.Module):
     def __init__(self, original_layer: nn.Linear, rank: int = 4, alpha: int = 1):
         super().__init__()

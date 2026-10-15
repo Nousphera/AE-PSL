@@ -31,9 +31,9 @@ def build_base_argument_parser():
     parser.add_argument('--torch_data_dir', type=str, default='data/datasets', help='The directory for the data of all datasets.')
     parser.add_argument('--pre_processors_cache_dir', type=str, default='data/preprocessors', help='The directory for all pre-processor weights.')
     parser.add_argument('--tokenizer_weights_cache_dir', type=str, default='data/tokenizers', help='The directory for all tokenizer weights.')
-    parser.add_argument('--model_weights_dir', type=str, default='data/model_checkpoints', help='The directory of all model weights. This is the directory in which the codebase expects the Meta-Transformer model weights to be present.')
+    parser.add_argument('--model_weights_dir', type=str, default='data/model_checkpoints', help='Directory for experiment model checkpoints.')
     parser.add_argument('--val_mode', nargs='+', type=str, choices=['none', 'early_saving', 'early_stopping'],
-                        default='none', help='Whether a validation set should be used. TODO full explanation')
+                        default='none', help='Select checkpoints or stop early using held-out training data; none uses the final epoch.')
     parser.add_argument('--val_split', type=float, default=0.1,
                         help='The proportion of the dataset to use for validation.')
 
@@ -57,7 +57,7 @@ def build_base_argument_parser():
     parser.add_argument('--batch_size', nargs='+', type=int, default=125, help='The batch size on the server. This means that with a batch_size of 500 with 25 clients, each client would have a mini-batch size of 20.')
     parser.add_argument('--nr_of_epochs', nargs='+', type=int, default=10)
     parser.add_argument('--start_lr', nargs='+', type=float, default=1e-4)
-    parser.add_argument('--scheduler', nargs='+', dest='scheduler', type=str, default='cosine', help='The learning rate scheduler to use for fine-tuning.', choices=['constant', 'step', 'cosine'])
+    parser.add_argument('--scheduler', nargs='+', dest='scheduler', type=str, default='cosine', help='The learning rate scheduler to use for fine-tuning.', choices=['constant', 'cosine'])
     parser.add_argument('--random_seed', nargs='+', type=int, default=42)
     parser.add_argument('--single_seed_per_process', type=lambda x: bool(strtobool(x)), default=False)
 
@@ -67,6 +67,7 @@ def build_base_argument_parser():
 
     parser.add_argument('--save_model_after_each_epoch',  dest='save_model_after_each_epoch', type=lambda x: bool(strtobool(x)), default=False, help='Whether model(s) weights should be saved after each training epoch.')
     parser.add_argument('--save_final_model', dest='save_final_model', type=lambda x: bool(strtobool(x)), default=False, help='Whether the final obtained model weights after training should be saved.')
+    parser.add_argument('--device', choices=['auto', 'cpu', 'cuda', 'mps'], default='auto', help='Training device.')
     parser.add_argument('--gpu_id', type=str, default=None, help='If desired, this parameter can be used to explicitly define which CUDA gpu to use.')
 
 
@@ -106,12 +107,12 @@ def expand_argument_parser_with_ae_pretraining_parameters(argument_parser):
 
     argument_parser.add_argument('--ae_pretrain_epochs', nargs='+', dest='ae_pretrain_epochs', type=int, default=30, help='The number of epochs to use for AE pre-training.')
     argument_parser.add_argument('--ae_pretrain_batch_size', nargs='+', dest='ae_pretrain_batch_size', type=int, default=512, help='The batch size to use for AE pre-training.')
-    argument_parser.add_argument('--ae_pretrain_start_lr', nargs='+', dest='ae_pretrain_start_lr', type=float, default=1e-3, help='The starting learning rate to use for AE pre-training.')
-    argument_parser.add_argument('--ae_pretrain_optimizer', nargs='+', dest='ae_pretrain_optimizer', type=str, default='adam', help='The optimizer to use for AE pre-training.', choices=['adam', 'adamw', 'sgd'])
+    argument_parser.add_argument('--ae_pretrain_start_lr', nargs='+', dest='ae_pretrain_start_lr', type=float, default=1e-4, help='The starting learning rate to use for AE pre-training.')
+    argument_parser.add_argument('--ae_pretrain_optimizer', nargs='+', dest='ae_pretrain_optimizer', type=str, default='adam', help='The optimizer to use for AE pre-training.', choices=['adam'])
     argument_parser.add_argument('--ae_pretrain_scheduler', nargs='+', dest='ae_pretrain_scheduler', type=str, default='cosine', help='The learning rate scheduler to use for AE pre-training.', choices=['step', 'cosine'])
     argument_parser.add_argument('--ae_pretrain_scheduler_step_size', nargs='+', dest='ae_pretrain_scheduler_step_size', type=int, default=5)
-    argument_parser.add_argument('--ae_pretrain_loss_fn', nargs='+', dest='ae_pretrain_loss_fn', type=str, default='mse', help='The loss function to use for AE pre-training.', choices=['mse', 'l1'])
-    argument_parser.add_argument('--ae_pretrain_cosine_eta_min', nargs='+', dest='ae_pretrain_cosine_eta_min', type=float, default=1e-4, help='The lowest reachable LR during cosine annealing')
+    argument_parser.add_argument('--ae_pretrain_loss_fn', nargs='+', dest='ae_pretrain_loss_fn', type=str, default='mse', help='The loss function to use for AE pre-training.', choices=['mse'])
+    argument_parser.add_argument('--ae_pretrain_cosine_eta_min', nargs='+', dest='ae_pretrain_cosine_eta_min', type=float, default=5e-5, help='The lowest reachable LR during cosine annealing')
     argument_parser.add_argument('--ae_freeze_encoder_during_finetuning', nargs='+', dest='ae_freeze_encoder_during_finetuning', type=lambda x: bool(strtobool(x)), default=True, help='Whether the encoder of the AE should be frozen during downstream fine-tuning.')
     argument_parser.add_argument('--ae_freeze_decoder_during_finetuning', nargs='+', dest='ae_freeze_decoder_during_finetuning', type=lambda x: bool(strtobool(x)), default=True, help='Whether the encoder of the AE should be frozen during downstream fine-tuning.')
 

@@ -7,7 +7,7 @@ if [[ -e "$env_path" ]]; then
   echo "Environment already exists: $env_path; activate it or choose another path." >&2
   exit 1
 fi
-"$python_bin" -m venv "$env_path"
+"$python_bin" -m venv --prompt ae-psl "$env_path"
 "$env_path/bin/python" -m pip install --upgrade pip
 "$env_path/bin/python" -m pip install -r requirements.txt
 "$env_path/bin/python" -m pip check

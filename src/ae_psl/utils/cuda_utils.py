@@ -1,69 +1,29 @@
-# As per https://discuss.pytorch.org/t/it-there-anyway-to-let-program-select-free-gpu-automatically/17560/12 last reply by Seonjun_Kim
-import os
-import subprocess
-import sys
+"""Select a requested accelerator without silently changing the experiment."""
 
 import torch
 
 
-def run_cmd(cmd):
-    out = (subprocess.check_output(cmd, shell=True)).decode('utf-8')[:-1]
-
-    return out
-
-
-def get_free_gpu_indices():
-    out = run_cmd('nvidia-smi -q -d Memory | grep -A4 GPU')
-    out = (out.split('\n'))[1:]
-    out = [l for l in out if '--' not in l]
-
-    total_gpu_num = int(len(out)/5)
-    gpu_bus_ids = []
-    for i in range(total_gpu_num):
-        gpu_bus_ids.append([l.strip().split()[1] for l in out[i*5:i*5+1]][0])
-
-    out = run_cmd('nvidia-smi --query-compute-apps=gpu_bus_id --format=csv')
-    gpu_bus_ids_in_use = (out.split('\n'))[1:]
-    gpu_ids_in_use = []
-
-    for bus_id in gpu_bus_ids_in_use:
-        gpu_ids_in_use.append(gpu_bus_ids.index(bus_id))
-
-    return [i for i in range(total_gpu_num) if i not in gpu_ids_in_use]
-
-
-def get_free_cuda_device_name(global_args):
-    chosen_gpu_id = global_args['gpu_id']
-
-    if chosen_gpu_id is not None:
-        return f'cuda:{chosen_gpu_id}'
-
-    is_windows_os = sys.platform.startswith('win')
-
-    return 'cuda'
-
-    if is_windows_os:
-        return 'cuda'
-
-    free_gpu_indices = get_free_gpu_indices()
-
-    if len(free_gpu_indices) == 0:
-        raise Exception('No CUDA devices available.')
-
-    gpu_idx = free_gpu_indices[0]
-    # Ensuring that only the necessary GPU is allocated
-    os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_idx)
-
-    return f'cuda:{gpu_idx}'
-
-
-def get_device(global_args):
-    if not torch.cuda.is_available():
-        print('No CUDA available, using CPU instead.')
-        if global_args['gpu_id'] == "mps":
-            return torch.device("mps")
-        else:
-            return torch.device("cpu")
-    else:
-        print("cuda is available")
-        return get_free_cuda_device_name(global_args)
+def get_device(arguments):
+    requested = arguments.get('device', 'auto')
+    gpu_id = arguments.get('gpu_id')
+    if requested == 'auto' and gpu_id is not None:
+        requested = 'mps' if gpu_id == 'mps' else 'cuda'
+    if requested == 'auto':
+        requested = 'cuda' if torch.cuda.is_available() else 'cpu'
+    if requested == 'cuda':
+        if not torch.cuda.is_available():
+            raise RuntimeError('CUDA was requested but is unavailable; select --device cpu or mps.')
+        if gpu_id is not None:
+            try:
+                index = int(gpu_id)
+            except (ValueError, TypeError) as error:
+                raise ValueError('--gpu_id must be a CUDA device index') from error
+            if not 0 <= index < torch.cuda.device_count():
+                raise ValueError('--gpu_id is outside the available CUDA devices')
+            return torch.device('cuda', index)
+    elif requested == 'mps':
+        if not torch.backends.mps.is_available():
+            raise RuntimeError('MPS was requested but is unavailable; select --device cpu.')
+    elif requested != 'cpu':
+        raise ValueError(f'Unsupported device: {requested}')
+    return torch.device(requested)

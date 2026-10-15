@@ -10,7 +10,6 @@ from .unimodal.image_classification.food101 import Food101
 from .unimodal.image_classification.imagenet100 import ImageNet100
 from .unimodal.image_classification.sun397 import SUN397
 
-import torch.nn.functional as F  # <--- ADD THIS LINE
 
 dataloaders = {
     # unimodal
@@ -18,9 +17,7 @@ dataloaders = {
     'food101': (Food101, 'food101'),
     'imagenet': (ImageNet100, 'imagenet'),
     'sun397': (SUN397, 'sun397'),
-    # 'stanford_cars': (StanfordCars, 'stanford_cars'),
     'femnist': (None, 'femnist'),
-    # 'speechcommands': (SpeechCommandsV2, 'speechcommands'),
 }
 
 
@@ -64,91 +61,6 @@ def get_vit_mnist_transforms():
     return transforms.Compose(layers)
 
 
-
-
-def get_ast_transforms(train: bool):
-    import torchaudio
-    """
-    Transforms audio waveform to normalized Mel-Spectrogram for AST.
-    AST's forward method expects (time_frames, frequency_bins).
-    """
-
-    class ASTTransform:
-        def __init__(self, train):
-            self.train = train
-            # Standard AST configuration
-            self.mel_transform = torchaudio.transforms.MelSpectrogram(
-                sample_rate=16000,
-                n_mels=128,
-                f_min=50,
-                f_max=8000
-            )
-            self.amp_to_db = torchaudio.transforms.AmplitudeToDB(stype='power')
-
-        def __call__(self, waveform):
-            # 1. Convert to Mel Spectrogram: (channels, n_mels, time)
-            mel_spec = self.mel_transform(waveform)
-            mel_spec = self.amp_to_db(mel_spec)
-
-
-            mean = torch.mean(mel_spec)
-            std = torch.std(mel_spec)
-            mel_spec = (mel_spec - mean) / (std * 2)
-
-
-            return mel_spec
-
-    return ASTTransform(train)
-
-
-def get_speechcommands_transforms(train: bool):
-    import torchaudio
-    """
-    Pads audio to 1s, computes MelSpectrogram (100x128), and normalizes for AST.
-    """
-
-    class ASTTransform:
-        def __init__(self, train):
-            self.train = train
-            self.target_length = 16000  # 1 second at 16kHz
-
-            # AST standard config for 16kHz audio
-            self.mel_transform = torchaudio.transforms.MelSpectrogram(
-                sample_rate=16000,
-                n_fft=400,
-                win_length=400,
-                hop_length=160,
-                f_min=50,
-                f_max=8000,
-                n_mels=128
-            )
-            self.amp_to_db = torchaudio.transforms.AmplitudeToDB(stype='power')
-
-        def __call__(self, waveform):
-            # 1. Pad or truncate to exactly 16000 samples
-            seq_len = waveform.shape[1]
-            if seq_len < self.target_length:
-                waveform = F.pad(waveform, (0, self.target_length - seq_len))
-            elif seq_len > self.target_length:
-                waveform = waveform[:, :self.target_length]
-
-            # 2. Convert to Mel Spectrogram
-            mel_spec = self.mel_transform(waveform)
-            mel_spec = self.amp_to_db(mel_spec)
-
-            # 3. Standardize (AST expectation)
-            mean = torch.mean(mel_spec)
-            std = torch.std(mel_spec)
-            mel_spec = (mel_spec - mean) / (std * 2)
-
-            # 4. Transpose for AST forward pass: (time_frames, freq_bins) -> (100, 128)
-            mel_spec = mel_spec.squeeze(0).transpose(0, 1)
-
-            # Optional: Add torchaudio.transforms.FrequencyMasking / TimeMasking here if self.train
-
-            return mel_spec
-
-    return ASTTransform(train)
 
 
 def get_train_val_split(dataset, val_split, seed):
@@ -470,14 +382,8 @@ def load_data(name='cifar100', num_partitions=10, min_num_samples=10, split='iid
     else:
         raise ValueError("FEMNIST uses the personalized prepared-writer trainer")
 
-    # audio_datasets = ['audioset', 'speechcommands']
-
-    if name == 'speechcommands':
-        train_transform = get_speechcommands_transforms(train=True)
-        val_transform = get_speechcommands_transforms(train=False)
-    else:
-        train_transform = get_default_vit_transforms(train=True)
-        val_transform = get_default_vit_transforms(train=False)
+    train_transform = get_default_vit_transforms(train=True)
+    val_transform = get_default_vit_transforms(train=False)
 
     return DistributedDataset(
         dataloader=ds,

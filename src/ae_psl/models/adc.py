@@ -2,7 +2,6 @@ import copy
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from kmeans_pytorch import kmeans
 from ae_psl.utils.mpsl_utils import get_communication_size
 
 
@@ -49,38 +48,44 @@ class AttentionCompressionLayer(nn.Module):
         prev_block.self_attention = self.attn_wrapper
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if not self.training:
-            return x
-
         n_batches, n_tokens, _ = x.size()
 
         self.n_new_tokens = max(1, int(self.token_compression * n_tokens))
-        self.n_new_batches = max(2, int(self.batch_compression * n_batches))
+        self.n_new_batches = max(1, int(self.batch_compression * n_batches))
         device = x.device
 
         class_token_attention = self.attn_wrapper.class_token_attention.to(device)
 
-        # We need some addition to make this compatible with small 
+        # Retain individual samples when batch compression cannot form groups.
         if self.n_new_batches >= n_batches or n_batches < 2:
             # Bypass K-Means: treat each individual image as its own cluster.
             # This ensures token compression still occurs so sequence lengths match across clients.
             self.n_new_batches = n_batches
             self.cluster_ids = torch.arange(n_batches, device=device)
             centroids = class_token_attention
+        elif self.n_new_batches == 1:
+            self.cluster_ids = torch.zeros(n_batches, dtype=torch.long, device=device)
+            centroids = class_token_attention.mean(dim=0, keepdim=True)
         else:
-            # Standard K-Means clustering
+            # Bounded Lloyd iterations. Keep empty centroids unchanged instead
+            # of taking an empty mean (NaN); singleton clusters stay rank two.
             with torch.no_grad():
-                cluster_ids, centroids = kmeans(
-                    X=class_token_attention,
-                    num_clusters=self.n_new_batches,
-                    distance='euclidean',
-                    tol=1e-4,
-                    iter_limit=500,
-                    device=device,
-                    tqdm_flag=False
-                )
-            self.cluster_ids = cluster_ids.detach().to(device)
-            centroids = centroids.detach().to(device)
+                centroids = class_token_attention[
+                    torch.randperm(n_batches, device=device)[:self.n_new_batches]
+                ].clone()
+                for _ in range(500):
+                    distances = (class_token_attention[:, None] - centroids[None]).square().sum(-1)
+                    ids = distances.argmin(dim=1)
+                    updated = centroids.clone()
+                    for index in range(self.n_new_batches):
+                        members = class_token_attention[ids == index]
+                        if len(members):
+                            updated[index] = members.mean(dim=0)
+                    shift = (updated - centroids).square().sum(dim=1).sqrt().sum()
+                    centroids = updated
+                    if shift.square() < 1e-4:
+                        break
+                self.cluster_ids = (class_token_attention[:, None] - centroids[None]).square().sum(-1).argmin(1)
 
         clustered_activations = []
 
@@ -167,20 +172,27 @@ class ClientModel(nn.Module):
 
         return x
 
+    def encode_for_transport(self, x):
+        compressed = self.compression_layer(x) if self.compression_layer is not None else x
+        return (compressed,), {}
+
+    def decode_from_transport(self, payload, context):
+        return payload[0]
+
     def compress_decompress(self, x):
-        if self.compression_layer is not None:
-            compressed_x = self.compression_layer(x)
-        else:
-            compressed_x = x
+        payload, context = self.encode_for_transport(x)
+        result = self.decode_from_transport(payload, context)
+        return result, 0.0, get_communication_size(result)
 
-        # Calculate communication size
-        comm_size_bytes = get_communication_size(compressed_x.clone())
-        mse = 0.0
-
-        return compressed_x, mse, comm_size_bytes
+    def expand_predictions(self, predictions):
+        """Return one prediction per original sample using client-local cluster IDs."""
+        if self.compression_layer is None or self.compression_layer.cluster_ids is None:
+            return predictions
+        _, inverse = torch.unique(self.compression_layer.cluster_ids, sorted=True, return_inverse=True)
+        return predictions[inverse]
 
     def compress_labels(self, labels: torch.Tensor) -> torch.Tensor:
-        if not self.training or self.compression_layer is None or self.compression_layer.cluster_ids is None:
+        if self.compression_layer is None or self.compression_layer.cluster_ids is None:
             return labels
 
         cluster_ids = self.compression_layer.cluster_ids

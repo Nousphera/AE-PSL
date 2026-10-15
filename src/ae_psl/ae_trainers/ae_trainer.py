@@ -1,13 +1,13 @@
-import hashlib
-import json
 import os
 import time
+import random
+
+import numpy as np
 from pathlib import Path
 
 import torch
 from torch.utils.data import DataLoader
-from torch.utils.data import DataLoader, TensorDataset
-from tqdm import tqdm, trange
+from tqdm import trange
 
 from ae_psl import available_datasets
 
@@ -22,10 +22,38 @@ from ae_psl.utils.model_saving_utils import save_ae_experiment_results
 from ae_psl.utils.scheduler_utils import get_ae_pretrain_optimizer_and_scheduler
 
 
-activations = {}
+from ae_psl.ae_trainers.activation_cache import (
+    ActivationDataset, EXTRACTION_BATCH_SIZE, feature_cache_signature,
+    feature_cache_name, feature_extractor_fingerprint, write_activation_cache,
+)
 
 # Makes the choice to pretrain or load an AE model based on global_args
-def get_auto_encoder(global_args, base_model, device, full_dataset : DistributedDataset = None):
+def get_auto_encoder(global_args, base_model, device, full_dataset: DistributedDataset = None):
+    """Isolate GA randomness so cache hits cannot change subsequent CSA/DFT."""
+    target = torch.device(device)
+    cuda_devices = [target.index if target.index is not None else torch.cuda.current_device()] if target.type == 'cuda' else []
+    python_state, numpy_state = random.getstate(), np.random.get_state()
+    mps_state = torch.mps.get_rng_state() if target.type == 'mps' else None
+    try:
+        with torch.random.fork_rng(devices=cuda_devices):
+            seed = global_args['random_seed']
+            random.seed(seed)
+            np.random.seed(seed)
+            torch.random.default_generator.manual_seed(seed)
+            if cuda_devices:
+                with torch.cuda.device(cuda_devices[0]):
+                    torch.cuda.manual_seed(seed)
+            if mps_state is not None:
+                torch.mps.manual_seed(seed)
+            return _get_auto_encoder(global_args, base_model, device, full_dataset)
+    finally:
+        random.setstate(python_state)
+        np.random.set_state(numpy_state)
+        if mps_state is not None:
+            torch.mps.set_rng_state(mps_state)
+
+
+def _get_auto_encoder(global_args, base_model, device, full_dataset=None):
 
     from ae_psl.prepare_data import sha256
     dataset_name = global_args['ae_pretrain_dataset']
@@ -45,9 +73,9 @@ def get_auto_encoder(global_args, base_model, device, full_dataset : Distributed
         'seed': global_args['random_seed'],
         'training': {key: value for key, value in global_args.items()
                      if key.startswith('ae_pretrain_') or key in ('val_mode','val_split','small_test_run')},
-        'backbone_sha256': backbone_fingerprint(base_model),
+        'backbone_sha256': feature_extractor_fingerprint(base_model, global_args['split_layer']),
         'dataset_root': os.path.abspath(os.environ.get('TORCH_DATA_DIR', 'data/datasets')),
-        'cache_schema': 4,
+        'cache_schema': 6,
         'prepared_manifest_sha256': source_digest,
         'supplied_split_sha256': getattr(full_dataset, 'source_digest', None),
         'uses_supplied_train_split': full_dataset is not None,
@@ -112,13 +140,15 @@ def get_auto_encoder(global_args, base_model, device, full_dataset : Distributed
             'ae_pretrain_dataset_fraction'])))
 
     train_dataloader = DataLoader(train_dataset,
-                                  batch_size=global_args['ae_pretrain_batch_size'], shuffle=True,
+                                  batch_size=EXTRACTION_BATCH_SIZE, shuffle=True,
+                                  generator=torch.Generator().manual_seed(global_args['random_seed']),
                                   pin_memory=True,
                                   num_workers=global_args['num_workers_activation_loading'],
                                   collate_fn=full_dataset.get_collate_fn())
 
     test_dataloader = DataLoader(test_dataset,
-                                 batch_size=global_args['ae_pretrain_batch_size'], shuffle=False,
+                                 batch_size=EXTRACTION_BATCH_SIZE, shuffle=False,
+                                 generator=torch.Generator().manual_seed(global_args['random_seed'] + 1),
                                  pin_memory=True,
                                  num_workers=global_args['num_workers_activation_loading'],
                                  collate_fn=full_dataset.get_collate_fn())
@@ -130,34 +160,22 @@ def get_auto_encoder(global_args, base_model, device, full_dataset : Distributed
     activations_dir = os.path.join('data', 'activations')
     os.makedirs(activations_dir, exist_ok=True)
 
-    base_name = filename_from_signature(ae_signature)
-    train_acts_path = os.path.join(activations_dir, f"{base_name}_train.pt")
-    test_acts_path = os.path.join(activations_dir, f"{base_name}_test.pt")
-
-    if os.path.exists(train_acts_path) and os.path.exists(test_acts_path):
-        print(
-            f"Loading cached activations from `data/activations`: {os.path.basename(train_acts_path)}, {os.path.basename(test_acts_path)}")
-        train_tensor = torch.load(train_acts_path, weights_only=True, map_location='cpu')
-        test_tensor = torch.load(test_acts_path, weights_only=True, map_location='cpu')
-        train_acts_dataset = TensorDataset(train_tensor)
-        test_acts_dataset = TensorDataset(test_tensor)
-    else:
-        print("Cached activations not found. Extracting activations and saving to `data/activations`.")
-        train_acts_dataset = extract_activations(base_model, global_args['split_layer'], train_dataloader, device,
-                                                global_args['ae_pretrain_dataset'] == 'cifar100')
-        test_acts_dataset = extract_activations(base_model, global_args['split_layer'], test_dataloader, device,
-                                               global_args['ae_pretrain_dataset'] == 'cifar100')
-
-        # Save the underlying tensors (extracted activations are on CPU already)
-        try:
-            torch.save(train_acts_dataset.tensors[0], train_acts_path)
-            torch.save(test_acts_dataset.tensors[0], test_acts_path)
-            print(
-                f"Saved activations to `data/activations` as {os.path.basename(train_acts_path)}, {os.path.basename(test_acts_path)}")
-        except Exception as e:
-            print(f"Warning: failed to save activations cache: {e}")
-
-
+    signature = feature_cache_signature(global_args, base_model, train_dataset, test_dataset,
+                                        source_digest or getattr(full_dataset, 'source_digest', None))
+    base_name = feature_cache_name(signature)
+    cache_datasets = []
+    for offset, (split, loader) in enumerate((('train', train_dataloader), ('test', test_dataloader))):
+        path = Path(activations_dir) / f'{base_name}_{split}.npy'
+        if path.exists():
+            print(f'Opening frozen-feature cache {path}')
+            dataset = ActivationDataset(path, expected_count=len(loader.dataset))
+        else:
+            print(f'Extracting frozen-feature cache {path}')
+            dataset = extract_activations(base_model, global_args['split_layer'], loader, device,
+                global_args['ae_pretrain_dataset'] == 'cifar100', cache_path=path,
+                seed=global_args['random_seed'] + offset)
+        cache_datasets.append(dataset)
+    train_acts_dataset, test_acts_dataset = cache_datasets
 
     # Calculate duration
     end_time = time.time()
@@ -325,36 +343,7 @@ def pretrain_auto_encoder(global_args, base_model, auto_encoder_model, train_act
 
     return auto_encoder_model, ae_experiment_results_json
 
-def extract_activations(base_model, split_layer, dataloader, device, raw_cifar=False):
-    """
-    Runs the base_model once over the dataset to extract activations.
-    Returns a TensorDataset containing these activations.
-    """
-    activations_list = []
-    base_model.eval()
-
-    print("Pre-computing activations...")
-    with torch.no_grad():
-        for X, _ in tqdm(dataloader, desc="Extracting"):
-
-            X = X.to(device)
-            if raw_cifar:
-                from ae_psl.trainers.implementations.classification.sasl_trainer import get_gpu_vit_transforms
-                X = get_gpu_vit_transforms(train=False)(X / 255.0)
-            # Get activations
-            acts = base_model.retrieve_split_layer_activations(X, split_layer)
-
-            # Move back to CPU to store in RAM (prevents GPU OOM)
-            activations_list.append(acts.cpu())
-
-    # Concatenate all batches and wrap in a dataset
-    all_activations = torch.cat(activations_list)
-    return TensorDataset(all_activations)
-
-def backbone_fingerprint(model):
-    """Bind cached public features to exact checkpoint/adapters, not just model name."""
-    digest = hashlib.sha256()
-    for key, value in sorted(model.state_dict().items()):
-        digest.update(key.encode())
-        digest.update(value.detach().cpu().contiguous().numpy().tobytes())
-    return digest.hexdigest()
+def extract_activations(base_model, split_layer, dataloader, device, raw_cifar=False, *, cache_path, seed=42):
+    """Stream frozen features into a complete, atomically published mmap cache."""
+    return write_activation_cache(base_model, split_layer, dataloader, device,
+                                  cache_path, raw_cifar=raw_cifar, seed=seed)

@@ -1,3 +1,4 @@
+import torch
 
 from ae_psl.trainers.implementations.experiment_trainer import ExperimentTrainer
 
@@ -11,7 +12,7 @@ class CentralizedAETrainer(ExperimentTrainer):
         auto_encoder.eval() if is_in_test_mode else auto_encoder.train()
 
         total_loss = 0
-        nr_of_batches = len(dataloader)
+        total_samples = 0
 
         # The dataloader now yields PRE-CALCULATED activations
         for batch in dataloader:
@@ -22,17 +23,20 @@ class CentralizedAETrainer(ExperimentTrainer):
             # We move the activations to GPU here for training
             activations = batch[0].to(device)
 
-            reconstructed = auto_encoder(activations)
-            loss = loss_fn(reconstructed, activations)
+            with torch.set_grad_enabled(not is_in_test_mode):
+                reconstructed = auto_encoder(activations)
+                loss = loss_fn(reconstructed, activations)
 
-            total_loss += loss.item()
+            total_loss += loss.item() * len(activations)
+            total_samples += len(activations)
 
             if not is_in_test_mode:
                 loss.backward()
                 optimizer.step()
 
-        if nr_of_batches > 0:
-            total_loss /= nr_of_batches
+        if not total_samples:
+            raise ValueError("Alignment received no samples")
+        total_loss /= total_samples
 
         if experiment_results is not None: experiment_results.add_results(epoch_nr, total_loss, is_in_test_mode)
 

@@ -18,9 +18,14 @@ class _QuantizeFunction(torch.autograd.Function):
             imag_q = _QuantizeFunction.quantize(x.imag, n_bits)
             return torch.complex(real_q, imag_q)
 
+        if n_bits == 32:
+            return x
         # Get min and max
         x_min = x.min()
         x_max = x.max()
+
+        if x_max == x_min:
+            return x.clone()
 
         # Get levels
         levels = 2 ** n_bits
@@ -63,7 +68,7 @@ class Quantization_Layer(nn.Module):
 
 
 class ClientModel(nn.Module):
-    def __init__(self, centralized_base_model, quant_module, sparse_module, device, split_layer, compress_cls_token, num_classes, rand_top_k_sparsity, bit_width, entropy_coding):
+    def __init__(self, centralized_base_model, quant_module, sparse_module, device, split_layer, compress_cls_token, num_classes, rand_top_k_sparsity, bit_width, entropy_coding=False):
         super().__init__()
         self.device = device
         self.split_layer = split_layer
@@ -120,62 +125,36 @@ class ClientModel(nn.Module):
 
         return x
 
+    def encode_for_transport(self, x):
+        patches = x if self.compress_cls_token else x[:, 1:]
+        flat = patches.flatten(1)
+        if self.sparse_module is None:
+            indices = torch.arange(flat.shape[1], device=x.device).expand(len(x), -1)
+        else:
+            indices = self.sparse_module.selected_indices(patches)
+        values = flat.gather(1, indices)
+        if self.quant_module is not None:
+            values = self.quant_module(values)
+        payload = (values, indices) if self.compress_cls_token else (values, indices, x[:, :1])
+        return payload, {'shape': list(patches.shape)}
+
+    def decode_from_transport(self, payload, context):
+        values, indices = payload[:2]
+        batch, tokens, width = context['shape']
+        patches = values.new_zeros(batch, tokens * width).scatter(1, indices, values)
+        patches = patches.reshape(batch, tokens, width)
+        return patches if self.compress_cls_token else torch.cat((payload[2], patches), dim=1)
+
     def compress_decompress(self, x):
-        if self.compress_cls_token:
-            cls_token = x[:, 0:1, :]
-            patches = x[:, 1:, :]
-            cls_comm_size_bytes = get_communication_size(cls_token.clone())
-        else:
-            patches = x
-
-        x_comm_size_bytes = get_communication_size(patches.clone())
-
-        sparse_compr_ratio = 1.0
-        quant_compr_ratio = 1.0
-        if self.sparse_module:
-            shape = patches.shape
-            batch_size = shape[0]
-            patch_nr = shape[1]
-
-            activations_size = batch_size * patch_nr * self.hidden_dim  # B x L x H
-
-            patches = self.sparse_module.forward(patches)
-
-            compr_ratio = self.sparse_module.get_compression_level(activations_size)
-            sparse_compr_ratio = compr_ratio
-            x_comm_size_bytes /= compr_ratio
-
-        if self.quant_module:
-            quant_compr_ratio = (32.0 / self.quant_module.n_bits)
-            x_comm_size_bytes /= quant_compr_ratio  # Adjust for quantization
-
-            # print(f"CLS Token Communication Size (bytes): {cls_comm_size_bytes}")
-            # print(f"Patches Communication Size (bytes): {x_comm_size_bytes} \n")
-
-
-            patches = self.quant_module.forward(patches)
-
-        comm_size_bytes = x_comm_size_bytes
-        if self.compress_cls_token:
-            x_reconstructed = torch.cat([cls_token, patches], dim=1)
-            comm_size_bytes += cls_comm_size_bytes
-        else:
-            x_reconstructed = patches
-
-        mse = F.mse_loss(x_reconstructed, x).item()
-
-        total_compr_ratio = sparse_compr_ratio * quant_compr_ratio
-
-        if not self.quant_module and not self.sparse_module:
-            x_reconstructed = x
-            mse = 0.0
-
-
-
-        return x_reconstructed, mse, comm_size_bytes
+        payload, context = self.encode_for_transport(x)
+        reconstructed = self.decode_from_transport(payload, context)
+        # Raw payload bytes. Training adds framing, logits and returned gradients.
+        size = sum(part.numel() * part.element_size() for part in payload)
+        return reconstructed, F.mse_loss(reconstructed, x).item(), size
 
     def switch_to_device(self, device):
         self.to(device)
+        self.device = device
         return self
 
 class ServerModel(nn.Module):
@@ -184,9 +163,9 @@ class ServerModel(nn.Module):
         self.device = device
 
         # Get all encoder layers after the split_layer
-        self.server_blocks = nn.Sequential(*list(centralized_base_model.vit.encoder.layers)[split_layer + 1 :])
-        self.final_layer_norm = centralized_base_model.vit.encoder.ln
-        self.heads = centralized_base_model.vit.heads
+        self.server_blocks = copy.deepcopy(nn.Sequential(*list(centralized_base_model.vit.encoder.layers)[split_layer:]))
+        self.final_layer_norm = copy.deepcopy(centralized_base_model.vit.encoder.ln)
+        self.heads = copy.deepcopy(centralized_base_model.vit.heads)
 
         self.compress_cls_token = compress_cls_token
 
@@ -205,4 +184,5 @@ class ServerModel(nn.Module):
 
     def switch_to_device(self, device):
         self.to(device)
+        self.device = device
         return self

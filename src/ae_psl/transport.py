@@ -12,10 +12,12 @@ import torch
 
 def transmit(tensor: torch.Tensor, *, requires_grad: bool = False):
     """Return an independent tensor and the exact encoded message byte count."""
-    if tensor.dtype != torch.float32:
-        raise ValueError("Reference transport supports float32 tensors only")
-    array = tensor.detach().cpu().contiguous().numpy().astype('<f4', copy=False)
-    header = json.dumps({'dtype': '<f4', 'shape': list(array.shape)}, separators=(',', ':')).encode()
+    dtypes = {torch.float32: '<f4', torch.int64: '<i8'}
+    if tensor.dtype not in dtypes:
+        raise ValueError("Reference transport supports float32 values and int64 indices")
+    dtype = dtypes[tensor.dtype]
+    array = tensor.detach().cpu().contiguous().numpy().astype(dtype, copy=False)
+    header = json.dumps({'dtype': dtype, 'shape': list(array.shape)}, separators=(',', ':')).encode()
     payload = struct.pack('!I', len(header)) + header + array.tobytes()
     length = struct.unpack('!I', payload[:4])[0]
     metadata = json.loads(payload[4:4+length])

@@ -183,7 +183,7 @@ class SASLTrainer(ExperimentTrainer):
         client_specific_acc_tuples, nr_of_elements_per_client = {_client_id: (0, 0) for _client_id in client_ids}, {
             _client_id: 0 for _client_id in client_ids}
 
-        client_model_requires_any_grad = not global_args['freeze_clientside']
+        client_model_requires_any_grad = client_model_requires_any_grad and not global_args['freeze_clientside']
         # = Communication tracking =
         client_outgoing_communication_sizes, client_incoming_communication_sizes = {_client_id: 0 for _client_id in
                                                                                     client_ids}, {_client_id: 0 for
@@ -557,12 +557,10 @@ class SASLTrainer(ExperimentTrainer):
 
         server_model.ae_module.patch_decoder.load_state_dict(global_ae_module.state_dict())
 
-        # If we're doing another epoch, we need to update the server-side AE decoders, to align with the next epoch.
-        # for client_id in range(global_args['nr_of_clients']):
-        #     client_models[client_id].ae_module.patch_decoder.load_state_dict \
-        #         (global_ae_module.patch_decoder.state_dict())
-        #     # Load individually updated state dict per client
-        #     client_models[client_id].ae_module.patch_encoder.load_state_dict(client_models_copied[client_id].ae_module.patch_encoder.state_dict())
+        redistribute = global_args.get('iterative_client_specific_alignment', False)
+        if redistribute:
+            for client in client_models.values():
+                client.ae_module.patch_decoder.load_state_dict(global_ae_module.state_dict())
 
         total_mse = 0
 
@@ -586,7 +584,7 @@ class SASLTrainer(ExperimentTrainer):
         comm_overhead = ae_comm_size  # Helper already reports MiB.
 
         if experiment_results is not None:
-            experiment_results.set_client_communication_overhead(epoch_nr, 0.0, comm_overhead)
+            experiment_results.set_client_communication_overhead(epoch_nr, comm_overhead if redistribute else 0.0, comm_overhead)
 
         return total_mse / global_args['nr_of_clients']
 

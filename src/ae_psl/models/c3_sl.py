@@ -52,29 +52,30 @@ def batch_circular_correlation_fft(x, h):
 class Encoder(nn.Module):
     def __init__(self, R, keys, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        if not isinstance(R, int) or R < 1:
+            raise ValueError("C3 group size must be a positive integer")
         self.R = R
-        self.keys = keys
+        self.register_buffer("keys", keys.clone())
         self.conv_flops = 0
 
     def forward(self, x, *args, **kwargs):
-        if self.training:
-            # Flatten into B x (P*d)
-            x = torch.flatten(x, start_dim=1)
-            batch_dim, features_dim = x.shape
+        # Flatten into B x (P*d)
+        x = torch.flatten(x, start_dim=1)
+        batch_dim, features_dim = x.shape
 
-            # Reshape into (B//R) x R x (P*d)
-            x = x.reshape(batch_dim // self.R, self.R, features_dim)
+        # Reshape into (B//R) x R x (P*d)
+        x = x.reshape(batch_dim // self.R, self.R, features_dim)
 
-            batch_over_r = batch_dim // self.R
-            conv_flops = compute_circular_convolution_flops(
-                batch_size=batch_over_r,
-                num_signals=self.R,
-                signal_length=features_dim
-            )
-            self.conv_flops += conv_flops
+        batch_over_r = batch_dim // self.R
+        conv_flops = compute_circular_convolution_flops(
+            batch_size=batch_over_r,
+            num_signals=self.R,
+            signal_length=features_dim
+        )
+        self.conv_flops += conv_flops
 
-            x = batch_circular_convolution_fft(x, self.keys)
-            x = x.sum(dim=1)  # shape: [B//R, P*d]
+        x = batch_circular_convolution_fft(x, self.keys)
+        x = x.sum(dim=1)  # shape: [B//R, P*d]
 
         return x
 
@@ -82,38 +83,37 @@ class Encoder(nn.Module):
 class Decoder(nn.Module):
     def __init__(self, keys, num_tokens, token_dim, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.keys = keys
+        self.register_buffer("keys", keys.clone())
         self.num_tokens = num_tokens
         self.token_dim = token_dim
         self.corr_flops = 0
 
     def forward(self, x, *args, **kwargs):
-        if self.training:
-            # from (B//R) x (P*d) -> (B//R) x 1 x (P*d)
-            x = x.unsqueeze(1)
+        # from (B//R) x (P*d) -> (B//R) x 1 x (P*d)
+        x = x.unsqueeze(1)
 
-            batch_over_r = x.shape[0]
-            num_signals = self.keys.shape[0]  # R
-            signal_length = x.shape[-1]  # P*d
+        batch_over_r = x.shape[0]
+        num_signals = self.keys.shape[0]  # R
+        signal_length = x.shape[-1]  # P*d
 
-            corr_flops = compute_circular_convolution_flops(
-                batch_size=batch_over_r,
-                num_signals=num_signals,
-                signal_length=signal_length
-            )
-            self.corr_flops += corr_flops
+        corr_flops = compute_circular_convolution_flops(
+            batch_size=batch_over_r,
+            num_signals=num_signals,
+            signal_length=signal_length
+        )
+        self.corr_flops += corr_flops
 
-            # Decode into a (B//R) x R x (P*d) tensor
-            x = batch_circular_correlation_fft(x, self.keys)
+        # Decode into a (B//R) x R x (P*d) tensor
+        x = batch_circular_correlation_fft(x, self.keys)
 
-            batch_over_R, R, features_dim = x.shape
-            batch_size = batch_over_R * R
+        batch_over_R, R, features_dim = x.shape
+        batch_size = batch_over_R * R
 
-            # Reshape into B x (P*d)
-            x = x.reshape(batch_size, features_dim)
+        # Reshape into B x (P*d)
+        x = x.reshape(batch_size, features_dim)
 
-            # Reshape into B x P x d
-            x = x.reshape(batch_size, self.num_tokens, self.token_dim)
+        # Reshape into B x P x d
+        x = x.reshape(batch_size, self.num_tokens, self.token_dim)
 
         return x
 
@@ -125,6 +125,8 @@ class ClientModel(nn.Module):
         super().__init__()
         self.device = device
         self.split_layer = split_layer
+        if not isinstance(R, int) or R < 1:
+            raise ValueError("C3 group size must be a positive integer")
         self.R = R
         self.num_patches = num_patches
         self.hidden_dim = hidden_dim
@@ -147,12 +149,12 @@ class ClientModel(nn.Module):
         self.flat_activation_size = self.num_patches * self.hidden_dim
 
         # Instantiate normal distribution keys and normalize
-        self.keys = torch.normal(0, 1 / self.flat_activation_size,
+        keys = torch.normal(0, 1 / self.flat_activation_size,
                                  size=(self.R, self.flat_activation_size)).to(device)
-        self.keys = self.keys / self.keys.norm(dim=1, keepdim=True)
+        keys = keys / keys.norm(dim=1, keepdim=True)
 
-        self.encoder = Encoder(self.R, self.keys)
-        self.decoder = Decoder(self.keys, self.num_patches, self.hidden_dim)
+        self.encoder = Encoder(self.R, keys)
+        self.decoder = Decoder(keys, self.num_patches, self.hidden_dim)
 
         self.compress_cls_token = compress_cls_token
 
@@ -172,65 +174,30 @@ class ClientModel(nn.Module):
         x = self.blocks(x)
         return x
 
+    def encode_for_transport(self, x):
+        patches = x if self.compress_cls_token else x[:, 1:]
+        batch, tokens, width = patches.shape
+        padding = (-batch) % self.R
+        if padding:
+            patches = torch.cat((patches, patches.new_zeros(padding, tokens, width)))
+        encoded = self.encoder(patches)
+        payload = (encoded,) if self.compress_cls_token else (encoded, x[:, :1])
+        return payload, {'batch': batch}
+
+    def decode_from_transport(self, payload, context):
+        # Keys are fixed, pre-shared codec state and are saved in both modules.
+        patches = self.decoder(payload[0])[:context['batch']]
+        return patches if self.compress_cls_token else torch.cat((payload[1], patches), dim=1)
+
     def compress_decompress(self, x):
-        # We skip the CLS token during C3-SL compression
-        if not self.compress_cls_token:
-            cls_token = x[:, 0:1, :]
-            patches = x[:, 1:, :]
-            cls_comm_size_bytes = get_communication_size(cls_token.clone())
-        else:
-            patches = x
-            cls_comm_size_bytes = 0
-
-        B, P, D = patches.shape
-
-        # --- Padding logic to handle uneven batch sizes --- (highly inefficient but it works)
-        # Calculate how many dummy samples we need to make B divisible by R
-        pad_len = (self.R - (B % self.R)) % self.R
-        if pad_len > 0:
-            padding = torch.zeros(pad_len, P, D, device=patches.device, dtype=patches.dtype)
-            patches_padded = torch.cat([patches, padding], dim=0)
-        else:
-            patches_padded = patches
-
-        # C3-SL Communication Cost Calculation
-        # C3-SL compresses the batch dimension: (B_padded // R) signals of length (P*D)
-        x_comm_size_bytes = (B // self.R) * (P * D) * 4.0  # Assumes float32
-
-        # Force train mode so the encoder/decoder compute FFTs
-        is_train = self.encoder.training
-        self.encoder.train()
-        self.decoder.train()
-
-        # Run the C3-SL compression and decompression pipeline on the padded data
-        encoded_patches = self.encoder(patches_padded)
-        decoded_patches = self.decoder(encoded_patches)
-
-        # Restore original state
-        self.encoder.train(is_train)
-        self.decoder.train(is_train)
-
-        # --- Remove padding after decoding ---
-        if pad_len > 0:
-            decoded_patches = decoded_patches[:B]
-
-        # Reconstruct full token sequence
-        if not self.compress_cls_token:
-            x_reconstructed = torch.cat([cls_token, decoded_patches], dim=1)
-        else:
-            x_reconstructed = decoded_patches
-        mse = F.mse_loss(x_reconstructed, x).item()
-
-        total_comm_bytes = cls_comm_size_bytes + x_comm_size_bytes
-        return x_reconstructed, mse, total_comm_bytes
+        payload, context = self.encode_for_transport(x)
+        reconstructed = self.decode_from_transport(payload, context)
+        size = sum(part.numel() * part.element_size() for part in payload)
+        return reconstructed, F.mse_loss(reconstructed, x).item(), size
 
     def switch_to_device(self, device):
         self.to(device)
         self.device = device
-        # Ensure keys migrate alongside the model
-        self.keys = self.keys.to(device)
-        self.encoder.keys = self.keys
-        self.decoder.keys = self.keys
         return self
 
 
@@ -238,9 +205,9 @@ class ServerModel(nn.Module):
     def __init__(self, centralized_base_model, device, split_layer):
         super().__init__()
         self.device = device
-        self.server_blocks = nn.Sequential(*list(centralized_base_model.vit.encoder.layers)[split_layer + 1:])
-        self.final_layer_norm = centralized_base_model.vit.encoder.ln
-        self.heads = centralized_base_model.vit.heads
+        self.server_blocks = copy.deepcopy(nn.Sequential(*list(centralized_base_model.vit.encoder.layers)[split_layer:]))
+        self.final_layer_norm = copy.deepcopy(centralized_base_model.vit.encoder.ln)
+        self.heads = copy.deepcopy(centralized_base_model.vit.heads)
         self.to(device)
 
     def forward_uncompressed(self, x):

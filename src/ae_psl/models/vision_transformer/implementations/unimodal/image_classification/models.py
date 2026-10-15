@@ -109,6 +109,7 @@ class BaseModel(AEVisionTransformer):
 
     def switch_to_device(self, device):
         self.to(device)
+        self.device = device
         return self
 
     def freeze_encoder(self):
@@ -152,7 +153,8 @@ class ClientModel(nn.Module):
 
         # 4. AE Encoder
         # The AE is located exactly at the split_layer index
-        # TODO need to only copy the patch encoder portion of the AE module, not the entire module (which includes the decoder)
+        # Retain the decoder for local CSA and reconstruction diagnostics.
+        # During DFT, predictions use the server's averaged decoder.
         self.ae_module = copy.deepcopy(centralized_base_model.vit.encoder.layers[self.split_layer])
         # self.ae_encoder = copy.deepcopy(ae_module.patch_encoder)
 
@@ -165,17 +167,6 @@ class ClientModel(nn.Module):
 
         # 1. Pre-processing (Client-side logic)
         x = x.to(self.device)
-
-        # --- AUDIO/AST FIX ---
-        if self.conv_proj.in_channels == 1:
-            if x.dim() == 3:
-                x = x.unsqueeze(1)
-            if x.dim() == 4 and x.shape[1] == 3:
-                x = x[:, 0:1, :, :]
-            if x.shape[3] == 128:
-                x = x.transpose(2, 3)
-            if x.shape[2:] != (128, 100):
-                x = torch.nn.functional.interpolate(x, size=(128, 100), mode='bilinear', align_corners=False)
 
         # Access the underlying ViT components
         n = x.shape[0]
@@ -227,6 +218,7 @@ class ClientModel(nn.Module):
 
     def switch_to_device(self, device):
         self.to(device)
+        self.device = device
         return self
 
 
@@ -302,5 +294,6 @@ class ServerModel(nn.Module):
 
     def switch_to_device(self, device):
         self.to(device)
+        self.device = device
         return self
 

@@ -52,8 +52,6 @@ def get_optimzer_and_scheduler_for_seperate_ae_finetuning(model: ClientModel, gl
 def get_scheduler(optimizer, global_args):
     if global_args['scheduler'] == 'constant':
         scheduler = torch.optim.lr_scheduler.ConstantLR(optimizer, factor=1.0, total_iters=0)
-    elif global_args['scheduler'] == 'step':
-        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=global_args['scheduler_step_size'])
     elif global_args['scheduler'] == 'cosine':
         # print("Warning, using CosineAnnealingLR default eta min lr 5e-5")
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=global_args['nr_of_epochs'],

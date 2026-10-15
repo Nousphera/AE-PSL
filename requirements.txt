@@ -1,2 +1,8 @@
-# Training, FEMNIST preparation, comparison methods and tests.
--e .[test,femnist,baselines]
+# Install from the repository root: python -m pip install -r requirements.txt
+torch==2.8.0
+torchvision==0.23.0
+numpy>=2.2,<3
+tqdm>=4.67,<5
+datasets>=3.6,<5
+pytest>=8,<10
+-e .

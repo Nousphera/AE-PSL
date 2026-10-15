@@ -9,24 +9,26 @@ import torch
 class RandomTopKModifier(nn.Module):
     def __init__(self, rate: float, random_portion: float = 0.1):
         super(RandomTopKModifier, self).__init__()
+        if not 0 < rate <= 1:
+            raise ValueError("Retained fraction must lie in (0, 1]")
         self.rate = rate
         self.random_portion = random_portion
 
+    def selected_indices(self, x: torch.Tensor):
+        flat = x.reshape(x.shape[0], -1)
+        size = flat.shape[1]
+        k = max(1, round(self.rate * size))
+        if k == size:
+            return torch.arange(size, device=x.device).expand(len(x), -1)
+        top = flat.abs().topk(k, sorted=False).indices
+        probs = torch.full_like(flat, self.random_portion / (size - k))
+        probs.scatter_(1, top, (1 - self.random_portion) / k)
+        return torch.multinomial(probs, k)
+
     def select_top_k(self, x: torch.Tensor):
-
-        batch_size = x.shape[0]
-        x_flat = x.reshape(batch_size, -1)
-        k = max(1, round(self.rate * x_flat.shape[1]))
-        sample_dim = x_flat.shape[1]
-        _, top_k_indices = torch.topk(torch.abs(x_flat), k, sorted=False)
-
-        probs = torch.full_like(x_flat.real, self.random_portion / (sample_dim - k))
-        probs = torch.scatter(probs, 1, top_k_indices, (1 - self.random_portion) / k)
-
-        selected_indices = torch.multinomial(probs, k)
-        mask = torch.scatter(torch.zeros_like(x_flat), 1, selected_indices, 1)
-
-        return mask.view(*x.shape) * x
+        flat = x.reshape(x.shape[0], -1)
+        indices = self.selected_indices(x)
+        return torch.zeros_like(flat).scatter(1, indices, flat.gather(1, indices)).reshape_as(x)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.select_top_k(x)

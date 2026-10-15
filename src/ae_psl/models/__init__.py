@@ -2,7 +2,6 @@ from typing import Any, Tuple
 
 import torch
 from ae_psl.models.auto_encoder import BaseViTAE
-# from models.fedlite import FedLite_Layer
 from ae_psl.models.quantization import Quantization_Layer
 from ae_psl.models.random_top_k import RandomTopKModifier
 
@@ -24,10 +23,7 @@ DATASET_CLASS_MAP = {
     'imagenet': 100,
     'food101': 101,
     'sun397': 397,
-    'stanford_cars': 196,
     'femnist': 62,
-    'audioset': 527,       # AST Dataset
-    'speechcommands': 35   # AST Dataset
 }
 
 
@@ -40,6 +36,17 @@ def _get_num_classes(dataset: str) -> int:
 
 # ========= BASE MODEL SELECTION ========= #
 
+def resolve_compression_config(global_args: dict) -> dict:
+    """Use an identity bottleneck for uncompressed PSL, without alignment."""
+    resolved = dict(global_args)
+    if resolved.get('compression_method') == 'none':
+        resolved.update(compression_method='ae', ae_type='identity',
+                        ae_general_alignment=False, client_specific_alignment=False,
+                        encoder_only_client_specific_alignment=False,
+                        iterative_client_specific_alignment_epochs=0)
+    return resolved
+
+
 def get_base_model(global_args: dict, device: torch.device) -> Any:
     model_name = global_args['model'].upper()
     if model_name not in SupportedModel.__members__:
@@ -48,7 +55,6 @@ def get_base_model(global_args: dict, device: torch.device) -> Any:
 
     return get_base_model_vit(global_args, device)
 
-    raise NotImplementedError(f"Chosen model '{global_args['model']}' layout logic is missing.")
 
 
 def get_base_model_vit(global_args: dict, device: torch.device) -> Any:
@@ -102,9 +108,6 @@ def get_split_model_and_trainer_vit(
     elif compression_method == 'adc':
         return _build_adc_compression(global_args, base_model, num_classes, device)
 
-    # elif compression_method == 'fedlite':
-    #     return _build_fedlite_compression(global_args, base_model, num_classes, device)
-
     elif compression_method == 'c3_sl':
         return _build_c3_sl_compression(global_args, base_model, num_classes, device)
 
@@ -127,7 +130,7 @@ def _build_c3_sl_compression(global_args: dict, base_model: Any, num_classes: in
         split_layer=global_args['split_layer'],
         device=device,
         R=R,
-        num_patches=get_num_patches(global_args['model'], global_args) if global_args['compress_cls_token'] else get_num_patches(global_args['model']) - 1,
+        num_patches=base_model.vit.encoder.pos_embedding.shape[1] - (not global_args['compress_cls_token']),
         hidden_dim=get_hidden_dim(global_args['model']),
         compress_cls_token=global_args['compress_cls_token']
     )
@@ -157,7 +160,6 @@ def _build_rand_top_k_compression(global_args: dict, base_model: Any, num_classe
         device=device,
         rand_top_k_sparsity=global_args['rand_top_k_sparsity'],
         bit_width=global_args['bit_width'],
-        entropy_coding=global_args['entropy_coding']
     )
 
     server_model = ServerModel(
@@ -168,32 +170,6 @@ def _build_rand_top_k_compression(global_args: dict, base_model: Any, num_classe
     )
     trainer = SASLTrainerHeuristicFLOPS() if global_args['profile_flops'] else SASLTrainerHeuristic()
     return (client_model, server_model, True), trainer
-
-#
-# def _build_fedlite_compression(global_args: dict, base_model: Any, num_classes: int, device: torch.device):
-#     from models.fedlite import ClientModel, ServerModel
-#
-#     q = global_args['fedlite_q']
-#     r = global_args['fedlite_r']
-#     l = global_args['fedlite_l']
-#
-#     quant_module = FedLite_Layer(q=q, r=r, l=l)
-#
-#     client_model = ClientModel(
-#         centralized_base_model=base_model,
-#         quant_module=quant_module,
-#         split_layer=global_args['split_layer'],
-#         device=device
-#     )
-#
-#     server_model = ServerModel(
-#         centralized_base_model=base_model,
-#         device=device,
-#         split_layer=global_args['split_layer']
-#     )
-#
-#     return (client_model, server_model, True), SASLTrainerHeuristic()
-
 
 def _build_adc_compression(global_args: dict, base_model: Any, num_classes: int, device: torch.device):
     from ae_psl.models.adc import ClientModel, ServerModel

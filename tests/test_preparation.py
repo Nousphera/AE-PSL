@@ -113,12 +113,21 @@ def test_femnist_keeps_remainder_and_keys_cache_by_source_and_validation(tmp_pat
 
 @pytest.mark.parametrize("dataset", ["cifar100", "food101", "sun397", "imagenet", "femnist"])
 def test_prepared_images_run_primary_ga_csa_dft(tmp_path, monkeypatch, dataset):
+    import torchvision
+    from torchvision.models.vision_transformer import VisionTransformer
     from ae_psl import available_datasets, orchestrator
     from ae_psl import main_AE_PSL_global_evaluation as global_experiment
     from ae_psl import main_AE_PSL_local_evaluation as local_experiment
     from ae_psl.models.vision_transformer.base.vision_transformer_base import VisionTransformerBase
 
     torch.set_num_threads(1)
+    # Exercise the actual phase/partition/checkpoint code with a bounded model.
+    # Full paper architecture is independently covered in test_paper_models.py.
+    monkeypatch.setattr(torchvision.models, "vit_b_32", lambda **kwargs: VisionTransformer(
+        image_size=224, patch_size=32, num_layers=6, num_heads=4,
+        hidden_dim=64, mlp_dim=128, num_classes=1000))
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
     root = tmp_path / "prepared"
     if dataset == "femnist":
         prepare_femnist(root, leaf_source(tmp_path / "leaf"))
@@ -136,7 +145,7 @@ def test_prepared_images_run_primary_ga_csa_dft(tmp_path, monkeypatch, dataset):
         "--torch_data_dir", str(root), "--dataset_split_type", "iid",
         "--nr_of_epochs", "1", "--ae_pretrain_epochs", "1", "--batch_size", "2",
         "--ae_pretrain_batch_size", "1", "--nr_of_clients", "2", "--split_layer", "5",
-        "--ae_latent_dim", "64", "--ae_force_retrain", "true", "--femnist_fraction", "1",
+        "--ae_latent_dim", "16", "--ae_force_retrain", "true", "--femnist_fraction", "1",
         "--num_workers_finetuning", "0", "--num_workers_ae_pretraining", "0",
         "--num_workers_activation_loading", "0", "--test_num_workers", "0",
         "--val_mode", "early_saving", "--val_split", "0.25",

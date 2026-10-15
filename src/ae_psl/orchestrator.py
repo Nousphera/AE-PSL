@@ -5,15 +5,11 @@ import copy
 import traceback
 from datetime import datetime
 from argparse import Namespace
-
-import json
-
-import traceback
-# from qcg.pilotjob.api.manager import LocalManager
-# from qcg.pilotjob.api.job import Jobs
+from pathlib import Path
+import tempfile
 
 
-from ae_psl.calculate_computation_overhead import compute_flops
+
 from ae_psl.main_AE_PSL_global_evaluation import run_2_stage_mpsl
 from ae_psl.utils.file_utils import save_object_to_json
 from ae_psl.utils.campaign_state import completed_result, last_recorded_epoch
@@ -54,17 +50,15 @@ def setup_orchestrator_parser():
     return parser
 
 
-import os
-import json
-import itertools
-from datetime import datetime
-
 
 def generate_manifest(experiment_name, experiments_dir, global_args, search_space):
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     campaign_folder_name = f"{timestamp}_{experiment_name}"
-    campaign_dir = os.path.join(experiments_dir, campaign_folder_name)
-    os.makedirs(os.path.join(campaign_dir, "logs"), exist_ok=True)
+    if Path(experiment_name).name != experiment_name or experiment_name in {'.', '..'}:
+        raise ValueError('Experiment name must be a simple folder name')
+    Path(experiments_dir).mkdir(parents=True, exist_ok=True)
+    campaign_dir = tempfile.mkdtemp(prefix=campaign_folder_name + '_', dir=experiments_dir)
+    os.makedirs(os.path.join(campaign_dir, 'logs'))
 
     # 1. Separate seeds from the rest of the search space
     # We use .get() to provide a default of [None] if no seeds are provided
@@ -218,10 +212,6 @@ def run_orchestrator(args: Namespace):
                                  'last_completed_epoch': -1}, status_path)
             # Execute the training stage directly
             # This handles AE pre-training/loading internally
-
-            if current_run_args['profile_flops'] == True:
-                compute_flops(current_run_args, job_params, manifest)
-                return
 
             if current_run_args['dataset'] == 'femnist':
                 run_2_stage_mpsl_personalized(current_run_args, job_params)
