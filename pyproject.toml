@@ -34,3 +34,6 @@ include = ["ae_psl*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.setuptools.data-files]
+"tests" = ["tests/conftest.py"]
