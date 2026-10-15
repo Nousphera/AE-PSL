@@ -2,9 +2,12 @@
 
 **AutoEncoder-Compressed Parallel Split Learning for Pre-Trained Model Fine-Tuning**
 
+[Paper](https://arxiv.org/abs/2607.17913) · [Project](https://nousphera.github.io/AE_PSL/) · [Citation](CITATION.cff)
+
+## Abstract
+
 Distributed Fine-Tuning (DFT) of large-scale Foundation Models (FMs) on resource-constrained edge devices is limited by local compute constraints and communication overhead. Parallel Split Learning (PSL) reduces client-side computation by keeping few model layers on each client and offloading the remaining computation to the server; however, clients must exchange intermediate activations and gradients with the server at every training step. Existing SL communication-compression methods mainly rely on task-agnostic heuristics, such as sparsification and quantization. While learnable SL compressors can better adapt to intermediate representations, they require co-training with the target model. Therefore, directly inserting them into off-the-shelf FMs introduces feature-distribution misalignment and degrades DFT performance. To address this, we propose AE-PSL, a communication-efficient PSL framework that compresses intermediate activations and gradients using a lightweight AutoEncoder (AE) placed at the split layer. To ensure compatibility of AE compression with pre-trained FMs, AE-PSL introduces a novel two-stage alignment mechanism, which adapts the AE to the pre-trained model’s feature manifold and client-specific feature distributions before DFT. We evaluate AE-PSL across four vision datasets and various communication reduction settings, showing that it preserves downstream accuracy at 10.2× reduction; at the same communication budget, the strongest evaluated heuristic baseline trails AE-PSL by 5.2 percent point. This demonstrates that AE-PSL offers a stronger accuracy–communication trade-off than heuristic SL compression.
 
-[Paper](https://arxiv.org/abs/2607.17913) · [Project](https://nousphera.github.io/AE_PSL/) · [Citation](CITATION.cff)
 
 ## Setup
 
@@ -61,4 +64,12 @@ Replace `--dataset cifar100` with `food101` or `sun397` for global evaluation, o
 
 For the downstream-GA ablation, set `--ae_pretrain_dataset` to the same dataset as `--dataset`; only downstream training examples enter GA optimization. `--val_mode early_saving --val_split 0.1` enables held-out checkpoint selection. The primary campaign command saves per-job metrics and completion state and supports `--resume_from_manifest PATH`. The `run_*.sh` scripts provide larger sweeps.
 
-[Reproducibility](REPRODUCIBILITY.md) explains the serialized single-process protocol, explicit logit-gradient communication correction, evaluation conventions, validated scope and benchmark limitations. [Provenance](PROVENANCE.md) records source history. Code uses the existing [MIT license](LICENSE).
+## Outputs and reproducibility
+
+The experiment directory contains the effective configuration, per-stage metrics, completion state and saved model checkpoints. Keep these together when comparing runs or resuming a campaign.
+
+[Reproducibility](REPRODUCIBILITY.md) explains the serialized single-process protocol, explicit logit-gradient communication correction, evaluation conventions, validated scope and benchmark limitations.
+
+## Citation and license
+
+Use [CITATION.cff](CITATION.cff) for the paper citation. [Provenance](PROVENANCE.md) records source history; code retains the [MIT license](LICENSE).
