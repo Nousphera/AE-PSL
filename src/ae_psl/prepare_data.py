@@ -185,7 +185,7 @@ def prepare_images(dataset, root, source=None, download=False, allow_subset=Fals
                 order = torch.randperm(len(data), generator=torch.Generator().manual_seed(42)).tolist()
                 cut = int(.8 * len(data))
                 collections = [("train", data, order[:cut]), ("test", data, order[cut:])]
-                provenance["split"] = "legacy 80/20 recipe, lexically ordered paths then torch seed 42; not official partitions or recovered historical membership"
+                provenance["split"] = "80/20 random split; lexically ordered paths then torch seed 42"
             else:
                 constructor = datasets.CIFAR100 if dataset == "cifar100" else datasets.Food101
                 collections = []
@@ -204,7 +204,7 @@ def prepare_images(dataset, root, source=None, download=False, allow_subset=Fals
         if len(classes) != COUNTS[dataset] and not allow_subset:
             raise ValueError(f"Expected {COUNTS[dataset]} classes; use --allow-subset only for a declared fixture")
         if dataset == "imagenet100":
-            provenance["historical_class_list_recovered"] = False
+            provenance["class_selection"] = "supplied class folders"
         write_json(stage / "manifest.json", {"schema": 1, "dataset": dataset, "classes": classes,
                    "records": rows, "allow_subset": allow_subset, "provenance": provenance})
         validate_manifest(stage / "manifest.json", True)
