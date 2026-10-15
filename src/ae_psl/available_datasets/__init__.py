@@ -55,7 +55,7 @@ def get_vit_mnist_transforms():
     layers = [
         transforms.Resize((224, 224)),
         # Convert 1 channel to 3 channels
-        transforms.Lambda(lambda x: x.convert("RGB")),
+        transforms.Grayscale(num_output_channels=3),
         transforms.ToTensor(),
         normalize,
     ]
@@ -464,6 +464,11 @@ def load_data(name='cifar100', num_partitions=10, min_num_samples=10, split='iid
             )
 
     ds, folder_name = dataloaders[name]
+    from .prepared import prepared_factory
+    if name != "femnist":
+        ds = prepared_factory(name) or ds
+    else:
+        raise ValueError("FEMNIST uses the personalized prepared-writer trainer")
 
     # audio_datasets = ['audioset', 'speechcommands']
 

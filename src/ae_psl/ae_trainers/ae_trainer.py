@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 import time
+from pathlib import Path
 
 import torch
 from torch.utils.data import DataLoader
@@ -26,6 +27,12 @@ activations = {}
 # Makes the choice to pretrain or load an AE model based on global_args
 def get_auto_encoder(global_args, base_model, device, full_dataset : DistributedDataset = None):
 
+    from ae_psl.prepare_data import sha256
+    dataset_name = global_args['ae_pretrain_dataset']
+    dataset_name = 'imagenet100' if dataset_name == 'imagenet' else dataset_name
+    manifest = Path(os.environ.get('TORCH_DATA_DIR', 'data/datasets')) / dataset_name / 'manifest.json'
+    source_digest = sha256(manifest) if manifest.exists() else None
+
     # This signature is used to identify the AE model. It will be used to find an existing AE model or to save a new one.
     ae_signature = {
         'type': global_args['ae_type'],
@@ -40,7 +47,9 @@ def get_auto_encoder(global_args, base_model, device, full_dataset : Distributed
                      if key.startswith('ae_pretrain_') or key in ('val_mode','val_split','small_test_run')},
         'backbone_sha256': backbone_fingerprint(base_model),
         'dataset_root': os.path.abspath(os.environ.get('TORCH_DATA_DIR', 'data/datasets')),
-        'cache_schema': 3,
+        'cache_schema': 4,
+        'prepared_manifest_sha256': source_digest,
+        'supplied_split_sha256': getattr(full_dataset, 'source_digest', None),
         'uses_supplied_train_split': full_dataset is not None,
 
     }
@@ -134,8 +143,10 @@ def get_auto_encoder(global_args, base_model, device, full_dataset : Distributed
         test_acts_dataset = TensorDataset(test_tensor)
     else:
         print("Cached activations not found. Extracting activations and saving to `data/activations`.")
-        train_acts_dataset = extract_activations(base_model, global_args['split_layer'], train_dataloader, device)
-        test_acts_dataset = extract_activations(base_model, global_args['split_layer'], test_dataloader, device)
+        train_acts_dataset = extract_activations(base_model, global_args['split_layer'], train_dataloader, device,
+                                                global_args['ae_pretrain_dataset'] == 'cifar100')
+        test_acts_dataset = extract_activations(base_model, global_args['split_layer'], test_dataloader, device,
+                                               global_args['ae_pretrain_dataset'] == 'cifar100')
 
         # Save the underlying tensors (extracted activations are on CPU already)
         try:
@@ -314,7 +325,7 @@ def pretrain_auto_encoder(global_args, base_model, auto_encoder_model, train_act
 
     return auto_encoder_model, ae_experiment_results_json
 
-def extract_activations(base_model, split_layer, dataloader, device):
+def extract_activations(base_model, split_layer, dataloader, device, raw_cifar=False):
     """
     Runs the base_model once over the dataset to extract activations.
     Returns a TensorDataset containing these activations.
@@ -326,6 +337,10 @@ def extract_activations(base_model, split_layer, dataloader, device):
     with torch.no_grad():
         for X, _ in tqdm(dataloader, desc="Extracting"):
 
+            X = X.to(device)
+            if raw_cifar:
+                from ae_psl.trainers.implementations.classification.sasl_trainer import get_gpu_vit_transforms
+                X = get_gpu_vit_transforms(train=False)(X / 255.0)
             # Get activations
             acts = base_model.retrieve_split_layer_activations(X, split_layer)
 

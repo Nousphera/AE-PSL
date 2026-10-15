@@ -37,6 +37,9 @@ def build_base_argument_parser():
     parser.add_argument('--val_split', type=float, default=0.1,
                         help='The proportion of the dataset to use for validation.')
 
+    parser.add_argument('--femnist_fraction', type=float, default=0.1,
+                        help='Per-writer subsampling fraction for prepared FEMNIST (0,1].')
+
     # == Dataset and model ==
     parser.add_argument('--dataset', nargs='+', type=str, required=True, choices=dataloaders.keys(), help='The dataset that should be used.')
 

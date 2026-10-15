@@ -9,7 +9,6 @@ from ae_psl import available_datasets as datasets
 from ae_psl import models
 
 from ae_psl.ae_trainers.ae_trainer import get_auto_encoder
-from ae_psl.available_datasets import get_vit_mnist_transforms
 from ae_psl.models import get_base_model
 from ae_psl.trainers.implementations.classification.sasl_trainer import SASLTrainer
 from ae_psl.trainers.implementations.experiment_results import ExperimentResults
@@ -18,8 +17,6 @@ from ae_psl.utils.orchestrator_argument_utils import build_base_argument_parser,
     namespace_to_dict
 from ae_psl.utils.config_utils import set_random_seed
 from ae_psl.utils.cuda_utils import get_device
-from ae_psl.utils.dataloader_utils import HFToTupleDataset, ClientAwareDataset, FederatedBatchSampler, \
-    federated_collate_fn
 from ae_psl.utils.model_saving_utils import save_experiment_results, \
     delete_model, save_combined_experiment_results
 from ae_psl.utils.model_saving_utils import save_personalized_model, load_personalized_model
@@ -231,8 +228,6 @@ def finetune_mpsl(global_args, device, server_model, client_models, trainer,
 
 
 def run_2_stage_mpsl_personalized(global_args: dict, search_space_args: dict):
-    from flwr_datasets import FederatedDataset
-    from flwr_datasets.partitioner import NaturalIdPartitioner
 
     set_random_seed(global_args['random_seed'])
     set_env_variables(global_args)
@@ -253,179 +248,9 @@ def run_2_stage_mpsl_personalized(global_args: dict, search_space_args: dict):
     validation_split = global_args['val_split']
     if validation_mode == 'none': validation_split = 0.0
 
-    # full_dataset = datasets.load_data(name=global_args['dataset'], num_partitions=global_args['nr_of_clients'],
-    #                                   split=global_args['dataset_split_type'], seed=global_args['random_seed'],
-    #                                   global_args=global_args, val_split=validation_split)
-    #
-    # val_dataset = full_dataset.load_validation_set()
-    # test_dataset = full_dataset.load_test_set()
-    fds = FederatedDataset(
-        dataset="flwrlabs/femnist",
-        partitioners={"train": NaturalIdPartitioner(partition_by="writer_id")},
-        # dataset_kwargs={"cache_dir": os.environ["TORCH_DATA_DIR"]}  # This points to your specific path
-    )
-
-    import os
-    from datasets import concatenate_datasets, load_from_disk
-    from torch.utils.data import DataLoader, ConcatDataset
-
-    # 1. Configuration & Cache Naming
-    total_partitions = fds.partitioners["train"].num_partitions
-    nr_of_clients = global_args['nr_of_clients']
-    subsample_size = 0.1  # 10% of each partition
-    seed = global_args['random_seed']
-
-    # Create a unique cache fingerprint
-    cache_dir_name = "fedmnist_dataset_cache"
-    cache_dir = os.path.join(os.environ['TORCH_DATA_DIR'], cache_dir_name, f"clients_{nr_of_clients}_sub_{subsample_size}_seed_{seed}")
-
-    partitions_per_client = total_partitions // nr_of_clients
-
-    train_datasets_list = []
-    partition_map = {}
-    current_offset = 0
-
-    client_val_dataloaders = {}
-    client_test_dataloaders = {}
-
-    # Reusable transforms
-    train_transform = get_vit_mnist_transforms()
-    test_transform = get_vit_mnist_transforms()
-
-    if os.path.exists(cache_dir):
-        print(f"Cache found! Loading datasets directly from: {cache_dir}")
-
-        for client_id in range(nr_of_clients):
-            client_dir = os.path.join(cache_dir, f"client_{client_id}")
-
-            # Load from disk
-            client_train_hf = load_from_disk(os.path.join(client_dir, "train"))
-            client_test_hf = load_from_disk(os.path.join(client_dir, "test"))
-
-            if validation_split > 0:
-                client_val_hf = load_from_disk(os.path.join(client_dir, "val"))
-            else:
-                client_val_hf = None
-
-            # Convert HF to PyTorch Datasets
-            client_train_ds = HFToTupleDataset(client_train_hf, transform=train_transform)
-            client_test_ds = HFToTupleDataset(client_test_hf, transform=test_transform)
-
-            # Save testing loaders
-            client_test_dataloaders[client_id] = DataLoader(client_test_ds, batch_size=total_batch_size, shuffle=False)
-            if client_val_hf:
-                client_val_ds = HFToTupleDataset(client_val_hf, transform=test_transform)
-                client_val_dataloaders[client_id] = DataLoader(client_val_ds, batch_size=total_batch_size,
-                                                               shuffle=False)
-
-            # Build partition map
-            train_datasets_list.append(client_train_ds)
-            num_items = len(client_train_ds)
-            partition_map[client_id] = list(range(current_offset, current_offset + num_items))
-            current_offset += num_items
-
-    else:
-        print(f"No cache found. Processing partitions and saving to: {cache_dir}")
-        os.makedirs(cache_dir, exist_ok=True)
-
-        for client_id in range(nr_of_clients):
-            start_p_id = client_id * partitions_per_client
-            end_p_id = start_p_id + partitions_per_client
-
-            client_train_partitions = []
-            client_test_partitions = []
-
-            # Load, subsample, and split EACH partition
-            for p_id in range(start_p_id, end_p_id):
-                partition_hf = fds.load_partition(partition_id=p_id, split="train")
-                num_samples = len(partition_hf)
-
-                # Skip partitions that are impossibly small
-                if num_samples < 2:
-                    # Need at least 2 samples to have a train and a test split
-                    continue
-
-                # enforce a minimum of 2 samples
-                target_subsample_size = max(2, int(num_samples * subsample_size))
-
-                if num_samples > target_subsample_size:
-                    # Use train_size as an integer absolute value instead of a float ratio
-                    subsampled_hf = partition_hf.train_test_split(
-                        train_size=target_subsample_size,
-                        seed=seed
-                    )['train']
-                else:
-                    subsampled_hf = partition_hf
-
-                # Safely split into train and test: ensure test gets at least 1
-                num_subsampled = len(subsampled_hf)
-                target_test_size = max(1, int(num_subsampled * 0.2))
-                target_train_size = num_subsampled - target_test_size
-
-                if target_train_size < 1:
-                    # Edge case fallback: if math resulted in 0 train samples,
-                    # put the remaining data strictly into training.
-                    client_train_partitions.append(subsampled_hf)
-                    continue
-
-                # Split using absolute integer sizes
-                train_test = subsampled_hf.train_test_split(
-                    test_size=target_test_size,
-                    seed=seed
-                )
-
-                client_train_partitions.append(train_test['train'])
-                client_test_partitions.append(train_test['test'])
-
-            # Merge
-            client_train_hf = concatenate_datasets(client_train_partitions)
-            client_test_hf = concatenate_datasets(client_test_partitions)
-
-            # Validation Split
-            if validation_split > 0:
-                train_val = client_train_hf.train_test_split(test_size=validation_split, seed=seed)
-                client_train_hf = train_val['train']
-                client_val_hf = train_val['test']
-            else:
-                client_val_hf = None
-
-            # --- CACHING STEP ---
-            client_dir = os.path.join(cache_dir, f"client_{client_id}")
-            client_train_hf.save_to_disk(os.path.join(client_dir, "train"))
-            client_test_hf.save_to_disk(os.path.join(client_dir, "test"))
-            if client_val_hf:
-                client_val_hf.save_to_disk(os.path.join(client_dir, "val"))
-
-            # Convert HF to PyTorch Datasets
-            client_train_ds = HFToTupleDataset(client_train_hf, transform=train_transform)
-            client_test_ds = HFToTupleDataset(client_test_hf, transform=test_transform)
-
-            # Save testing loaders
-            client_test_dataloaders[client_id] = DataLoader(client_test_ds, batch_size=total_batch_size, shuffle=False)
-            if client_val_hf:
-                client_val_ds = HFToTupleDataset(client_val_hf, transform=test_transform)
-                client_val_dataloaders[client_id] = DataLoader(client_val_ds, batch_size=total_batch_size,
-                                                               shuffle=False)
-
-            # Build partition map
-            train_datasets_list.append(client_train_ds)
-            num_items = len(client_train_ds)
-            partition_map[client_id] = list(range(current_offset, current_offset + num_items))
-            current_offset += num_items
-
-            print(f"Client {client_id} processed & cached: {num_items} training samples.")
-
-    # Construct the global loader
-    combined_train_ds = ConcatDataset(train_datasets_list)
-    client_aware_ds = ClientAwareDataset(combined_train_ds, partition_map)
-    fed_sampler = FederatedBatchSampler(partition_map, mini_batch_size, shuffle=True)
-
-    global_train_dataloader = DataLoader(
-        client_aware_ds,
-        batch_sampler=fed_sampler,
-        num_workers=global_args['num_workers_finetuning'],
-        pin_memory=True,
-        collate_fn=federated_collate_fn
+    from ae_psl.available_datasets.prepared import femnist_loaders, PreparedAlignmentData
+    global_train_dataloader, client_val_dataloaders, client_test_dataloaders = femnist_loaders(
+        global_args, mini_batch_size, total_batch_size
     )
 
     base_model = get_base_model(global_args, device=device)
@@ -436,9 +261,12 @@ def run_2_stage_mpsl_personalized(global_args: dict, search_space_args: dict):
     if compression_method == 'ae':
         is_train_ae_on_downstream_data = global_args['dataset'] == global_args['ae_pretrain_dataset']
 
-        # We only reuse the full dataset if AE pretraining uses the same dataset
-        auto_encoder_model, ae_pretrain_results = get_auto_encoder(global_args, base_model, device,
-                                                                   None)
+        alignment_data = PreparedAlignmentData(
+            global_train_dataloader, client_test_dataloaders, global_args["femnist_preparation"]
+        ) if is_train_ae_on_downstream_data else None
+        auto_encoder_model, ae_pretrain_results = get_auto_encoder(
+            global_args, base_model, device, alignment_data
+        )
         param_count_total = auto_encoder_model.get_parameter_count()
 
         auto_encoder_model.freeze(freeze_encoder=global_args['ae_freeze_encoder_during_finetuning'],

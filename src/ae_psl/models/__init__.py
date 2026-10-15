@@ -21,6 +21,7 @@ from ae_psl.utils.model_utils import SupportedModel, get_hidden_dim, get_num_pat
 # Centralized dataset configuration to eliminate duplicate mappings
 DATASET_CLASS_MAP = {
     'cifar100': 100,
+    'imagenet': 100,
     'food101': 101,
     'sun397': 397,
     'stanford_cars': 196,

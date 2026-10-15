@@ -2,38 +2,63 @@
 
 **AutoEncoder-Compressed Parallel Split Learning for Pre-Trained Model Fine-Tuning**
 
-Bas Meuwissen · Vasileios Tsouvalas · Nirvana Meratnia
+Distributed Fine-Tuning (DFT) of large-scale Foundation Models (FMs) on resource-constrained edge devices is limited by local compute constraints and communication overhead. Parallel Split Learning (PSL) reduces client-side computation by keeping few model layers on each client and offloading the remaining computation to the server; however, clients must exchange intermediate activations and gradients with the server at every training step. Existing SL communication-compression methods mainly rely on task-agnostic heuristics, such as sparsification and quantization. While learnable SL compressors can better adapt to intermediate representations, they require co-training with the target model. Therefore, directly inserting them into off-the-shelf FMs introduces feature-distribution misalignment and degrades DFT performance. To address this, we propose AE-PSL, a communication-efficient PSL framework that compresses intermediate activations and gradients using a lightweight AutoEncoder (AE) placed at the split layer. To ensure compatibility of AE compression with pre-trained FMs, AE-PSL introduces a novel two-stage alignment mechanism, which adapts the AE to the pre-trained model’s feature manifold and client-specific feature distributions before DFT. We evaluate AE-PSL across four vision datasets and various communication reduction settings, showing that it preserves downstream accuracy at 10.2× reduction; at the same communication budget, the strongest evaluated heuristic baseline trails AE-PSL by 5.2 percent point. This demonstrates that AE-PSL offers a stronger accuracy–communication trade-off than heuristic SL compression.
 
-[Paper](https://arxiv.org/abs/2607.17913) · [Project](https://nousphera.github.io/AE_PSL/) · [Reproducibility](REPRODUCIBILITY.md) · [Provenance](PROVENANCE.md)
+[Paper](https://arxiv.org/abs/2607.17913) · [Project](https://nousphera.github.io/AE_PSL/) · [Citation](CITATION.cff)
 
-AE-PSL compresses patch-token activations and their gradients at a ViT split point. General alignment (GA) learns an autoencoder on public features; client-specific alignment (CSA) adapts local encoders and averages decoders; distributed fine-tuning (DFT) freezes the autoencoders while training LoRA adapters and the classifier. CLS tokens travel uncompressed.
+## Setup
 
-This release contains the original experiment implementation, corrected training paths, and a bounded CPU integration run. It uses serialized boundaries in one process. Detached client logits return explicit logit gradients for the server backward pass; those extra bytes are included. Scalar losses alone cannot provide those gradients. This correction and the distinction from the paper's communication claims are detailed in [Reproducibility](REPRODUCIBILITY.md#transport-and-claims).
-
-## Install and run
-
-Use Python 3.12–3.13 in an isolated environment. The tested CPU environment is Python 3.12, PyTorch 2.8 and torchvision 0.23.
+Use Python 3.12 or 3.13. The tested stack is Python 3.12, PyTorch 2.8 and torchvision 0.23.
 
 ```bash
-python3.12 -m venv .venv
+git clone https://github.com/Nousphera/AE_PSL.git
+cd AE_PSL
+bash scripts/setup_env.sh .venv
 source .venv/bin/activate
-python -m pip install -c constraints-tested.txt '.[test]'
 python -m pytest -q
+ae-psl --help
+```
+
+`PYTHON=python3.13 bash scripts/setup_env.sh .venv` selects another supported interpreter. The script creates a new environment, installs the package with tested constraints, and checks dependencies. Choose a fresh path if an environment already exists. For CUDA, install the matching PyTorch 2.8/torchvision 0.23 wheels for your hardware in that environment.
+
+## Datasets
+
+The preparation CLI writes decoded images, SHA-256 checksums, class mappings and explicit split membership. The trainers consume these manifests directly. Select the datasets your experiment needs:
+
+```bash
+python scripts/prepare_data.py images --dataset cifar100 --download
+python scripts/prepare_data.py images --dataset food101 --download
+# Supply an already acquired official SUN397 archive; its published URL is currently unavailable.
+python scripts/prepare_data.py images --dataset sun397 --archive /path/to/SUN397.tar.gz
+# Supply licensed ImageNet images in train/<class>/ and test/<class>/ folders.
+python scripts/prepare_data.py images --dataset imagenet100 --source /path/to/imagenet100
+# Import LEAF's writer-preserving train/*.json and test/*.json splits.
+python scripts/prepare_data.py femnist --source /path/to/leaf/femnist/data
+```
+
+[Dataset instructions](docs/DATA.md) cover official acquisition, pinned Hugging Face FEMNIST, folder imports, validation, storage and client partitions. SUN397 uses the inherited 80/20 random-split recipe, not official SUN partitions. The historical ImageNet100 class list is unavailable; record your selected classes when reporting results.
+
+## Run
+
+Check the installed training stack without downloading datasets or checkpoints:
+
+```bash
 ae-psl-smoke --seed 42 --output results/smoke.json
 ```
 
-The smoke run downloads nothing. It trains a real, randomly initialized two-block ViT through GA → CSA → DFT on small synthetic image datasets. It verifies frozen weights and gradient flow, then evaluates both global (AE bypassed) and local (AE active) models. The JSON records configuration, dependency versions, metrics, communication, and a model-state digest. A matching NPZ contains all client/server model tensors and loads with `numpy.load(path, allow_pickle=False)`. Existing outputs are refused; checkpoints are for inspection/inference, not optimizer-resume training. Synthetic accuracy is **not a paper benchmark**.
+This runs a real small ViT through general alignment (GA), client-specific alignment (CSA), and distributed fine-tuning (DFT), then saves metrics and model tensors. Synthetic accuracy is not a benchmark result. Existing smoke outputs are preserved; choose another output name to rerun.
 
-## Paper experiments
+After preparing CIFAR-100 and ImageNet100, run a single experiment:
 
 ```bash
-# Supply ImageNet100 first; see the required layout and limitations below.
-ae-psl --dataset cifar100 --model vit_b_32 --nr_of_clients 5 \
-  --batch_size 125 --nr_of_epochs 10 --split_layer 5 \
-  --ae_latent_dim 24 64 140 --random_seed 42 43 44 \
-  --save_final_model true --experiment_name cifar100_three_seeds
+ae-psl --dataset cifar100 --ae_pretrain_dataset imagenet \
+  --torch_data_dir data/datasets --model vit_b_32 --nr_of_clients 5 \
+  --batch_size 125 --nr_of_epochs 10 --split_layer 5 --ae_latent_dim 64 \
+  --random_seed 42 --save_final_model true --experiment_name cifar100
 ```
 
-This is a large experiment sweep, with 30 GA epochs and one CSA epoch by default. Torchvision downloads the named pretrained ViT weights and CIFAR-100 when needed. [Dataset preparation, FEMNIST installation, configuration, and evaluation details](REPRODUCIBILITY.md#datasets-and-experiments) include the fixed SUN397 split and ImageNet100 class-list limitation. `ae-psl --help` lists the full configuration; existing `run_*.sh` scripts use the installed module. Optional audio research files are retained for provenance and are outside this vision release's supported scope.
+Replace `--dataset cifar100` with `food101` or `sun397` for global evaluation, or `femnist` for personalized writer evaluation. FEMNIST defaults to 10% of each writer's samples; `--femnist_fraction 1` retains all samples. GA defaults to 30 epochs on the supplied ImageNet100 subset, followed by one CSA epoch and 10 DFT epochs. The first run downloads torchvision's pretrained ViT weights. Full experiments require substantial compute and storage.
 
-Code is distributed under the repository's existing [MIT license](LICENSE). Please cite [CITATION.cff](CITATION.cff).
+For the downstream-GA ablation, set `--ae_pretrain_dataset` to the same dataset as `--dataset`; only downstream training examples enter GA optimization. `--val_mode early_saving --val_split 0.1` enables held-out checkpoint selection. The primary campaign command saves per-job metrics and completion state and supports `--resume_from_manifest PATH`. The `run_*.sh` scripts provide larger sweeps.
+
+[Reproducibility](REPRODUCIBILITY.md) explains the serialized single-process protocol, explicit logit-gradient communication correction, evaluation conventions, validated scope and benchmark limitations. [Provenance](PROVENANCE.md) records source history. Code uses the existing [MIT license](LICENSE).

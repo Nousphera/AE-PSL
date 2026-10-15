@@ -14,7 +14,7 @@ dependencies = ["torch>=2.8,<2.9", "torchvision>=0.23,<0.24", "numpy>=2.2,<3", "
 
 [project.optional-dependencies]
 test = ["pytest>=8,<10"]
-femnist = ["datasets>=3.6,<4", "flwr-datasets==0.6.0"]
+femnist = ["datasets>=3.6,<4"]
 plots = ["matplotlib>=3.10,<4", "pandas>=2.3,<3"]
 baselines = ["kmeans-pytorch==0.3"]
 dino = ["timm>=1.0,<2"]
@@ -22,6 +22,7 @@ dino = ["timm>=1.0,<2"]
 [project.scripts]
 ae-psl-smoke = "ae_psl.smoke:main"
 ae-psl = "ae_psl.orchestrator:main"
+ae-psl-data = "ae_psl.prepare_data:main"
 
 [project.urls]
 Paper = "https://arxiv.org/abs/2607.17913"

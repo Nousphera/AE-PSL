@@ -78,10 +78,11 @@ class ClientAwareDataset(torch.utils.data.Dataset):
 
 
 class FederatedBatchSampler(Sampler):
-    def __init__(self, partition_id_to_indices, mini_batch_size, shuffle):
+    def __init__(self, partition_id_to_indices, mini_batch_size, shuffle=False, seed=42):
         self.partition_id_to_indices = partition_id_to_indices
         self.mini_batch_size = mini_batch_size
         self.shuffle = shuffle
+        self.seed = seed
 
     def __iter__(self):
         # Create a copy of indices so we can pop from them
@@ -90,7 +91,7 @@ class FederatedBatchSampler(Sampler):
             idx_copy = list(indices)
             if self.shuffle:
                 # torch.randperm(len(idx_copy)).tolist()  # Optional: shuffle
-                generator = torch.Generator().manual_seed(42 + client_id)
+                generator = torch.Generator().manual_seed(self.seed + client_id)
                 perm = torch.randperm(len(idx_copy), generator=generator).tolist()
                 idx_copy = [idx_copy[i] for i in perm]
             client_indices[client_id] = idx_copy
