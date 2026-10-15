@@ -36,4 +36,4 @@ include = ["ae_psl*"]
 testpaths = ["tests"]
 
 [tool.setuptools.data-files]
-"tests" = ["tests/conftest.py"]
+"share/ae-psl/tests" = ["tests/conftest.py"]
