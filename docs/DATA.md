@@ -46,11 +46,10 @@ Obtain ImageNet images under the [provider's terms](https://www.image-net.org/do
 The primary personalized trainer requires a prepared writer manifest. Choose one source:
 
 ```bash
-# LEAF JSON: no optional Hugging Face dependency required.
+# Import the official LEAF JSON files.
 python scripts/prepare_data.py femnist --source /path/to/leaf/femnist/data
 
 # Alternatively, download a pinned provider revision.
-python -m pip install -e '.[femnist]' -c constraints-tested.txt
 python scripts/prepare_data.py femnist --revision REPLACE_WITH_40_CHARACTER_COMMIT
 ```
 

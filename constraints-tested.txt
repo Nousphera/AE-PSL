@@ -1,6 +1,0 @@
-# Verified CPU release environment: Python 3.12, macOS arm64.
-torch==2.8.0
-torchvision==0.23.0
-numpy==2.5.4
-tqdm==4.67.1
-pytest==9.1.1

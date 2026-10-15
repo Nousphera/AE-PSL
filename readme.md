@@ -35,7 +35,7 @@ python -m pytest -q
 ae-psl --help
 ```
 
-`PYTHON=python3.13 bash scripts/setup_env.sh .venv` selects another supported interpreter. The script creates a new environment, installs the package with tested constraints, and checks dependencies. Choose a fresh path if an environment already exists. For CUDA, install the matching PyTorch 2.8/torchvision 0.23 wheels for your hardware in that environment.
+`PYTHON=python3.13 bash scripts/setup_env.sh .venv` selects another supported interpreter. The script creates a new environment, installs `requirements.txt` (training, FEMNIST preparation, comparison methods and tests), and checks dependencies. Choose a fresh path if an environment already exists. For CUDA, install the matching PyTorch 2.8/torchvision 0.23 wheels for your hardware in that environment.
 
 ## Datasets
 
@@ -176,8 +176,7 @@ Tests exercise the complete paper architecture, serialized gradient equivalence,
 frozen backbone/AE behavior, unchanged CLS gradients, local adaptation, global
 and personalized evaluation, dataset/cache integrity, checkpoint selection and
 campaign resume. Full corpus runs and pretrained accuracy remain separate research
-experiments. [constraints-tested.txt](constraints-tested.txt) records the tested
-Python 3.12 CPU environment.
+experiments. Install the project dependencies with `python -m pip install -r requirements.txt`.
 
 ## Results
 

@@ -1,1 +1,2 @@
--e .[test]
+# Training, FEMNIST preparation, comparison methods and tests.
+-e .[test,femnist,baselines]
