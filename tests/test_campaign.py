@@ -83,8 +83,8 @@ def test_best_latest_final_checkpoints_and_test_loss(
         save_final_model=True,
         save_file_name=str(tmp_path / "model"),
     )
-    clients = {i: torch.nn.Linear(1, 1, bias=False) for i in (0, 1)}
-    server = torch.nn.Linear(1, 1, bias=False)
+    clients = {i: torch.nn.ParameterDict({'weight': torch.nn.Parameter(torch.zeros(1))}) for i in (0, 1)}
+    server = torch.nn.ParameterDict({'weight': torch.nn.Parameter(torch.zeros(1))})
     optimizer = torch.optim.SGD(server.parameters(), lr=0.1)
     scheduler = torch.optim.lr_scheduler.ConstantLR(optimizer, factor=1)
     validation = (
@@ -152,8 +152,8 @@ def test_ga_uses_supplied_training_partition(tmp_path, monkeypatch):
     args, _ = namespace_to_global_args_and_search_space(
         setup_orchestrator_parser().parse_args(["--dataset", "food101"])
     )
-    tiny_args, base, _ = create_system()
-    args.update(tiny_args)
+    paper_args, base, _ = create_system()
+    args.update(paper_args)
     args.update(
         ae_pretrain_dataset="synthetic",
         ae_force_retrain=True,
@@ -166,13 +166,13 @@ def test_ga_uses_supplied_training_partition(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
     class Data:
-        train_ds = TensorDataset(torch.randn(4, 3, 16, 16), torch.zeros(4))
+        train_ds = TensorDataset(torch.randn(2, 3, 224, 224), torch.zeros(2))
 
         def load_partition(self, partition_id):
             raise AssertionError("GA must use all client training examples")
 
         def load_test_set(self):
-            return TensorDataset(torch.randn(2, 3, 16, 16), torch.zeros(2))
+            return TensorDataset(torch.randn(1, 3, 224, 224), torch.zeros(1))
 
         def get_collate_fn(self):
             return None
@@ -226,7 +226,6 @@ def test_primary_orchestrator_runs_real_phases_and_resumes(
     from types import SimpleNamespace
 
     from torch.utils.data import Subset, TensorDataset
-    from torchvision.models.vision_transformer import VisionTransformer
 
     from ae_psl import main_AE_PSL_global_evaluation as experiment
     from ae_psl import orchestrator
@@ -247,15 +246,15 @@ def test_primary_orchestrator_runs_real_phases_and_resumes(
             "--ae_pretrain_epochs",
             "1",
             "--batch_size",
-            "4",
+            "2",
             "--ae_pretrain_batch_size",
             "2",
             "--nr_of_clients",
             "2",
             "--split_layer",
-            "1",
+            "5",
             "--ae_latent_dim",
-            "4",
+            "64",
             "--ae_force_retrain",
             "true",
             "--num_workers_finetuning",
@@ -278,10 +277,10 @@ def test_primary_orchestrator_runs_real_phases_and_resumes(
     class FixtureData:
         def __init__(self):
             self.train_ds = TensorDataset(
-                torch.randn(8, 3, 16, 16), torch.arange(8) % 3
+                torch.randn(4, 3, 224, 224), torch.arange(4) % 3
             )
             self.partitioner = SimpleNamespace(
-                _partition_id_to_indices={0: [0, 1, 2, 3], 1: [4, 5, 6, 7]},
+                _partition_id_to_indices={0: [0], 1: [1, 2, 3]},
                 _determine_partition_id_to_indices_if_needed=lambda: None,
             )
 
@@ -294,23 +293,14 @@ def test_primary_orchestrator_runs_real_phases_and_resumes(
             return None
 
         def load_test_set(self):
-            return TensorDataset(torch.randn(3, 3, 16, 16), torch.arange(3))
+            return TensorDataset(torch.randn(1, 3, 224, 224), torch.arange(1))
 
         def get_collate_fn(self):
             return None
 
-    def small_backbone(args, device):
-        backbone = VisionTransformer(
-            image_size=16,
-            patch_size=8,
-            num_layers=2,
-            num_heads=2,
-            hidden_dim=16,
-            mlp_dim=32,
-            num_classes=3,
-        )
+    def paper_backbone(args, device):
         return VisionTransformerBase(
-            "vit_b_32", True, 2, 4, 101, device, backbone=backbone
+            "vit_b_32", True, 16, 32, 101, device, pretrained=False
         )
 
     # Replace only external data/checkpoint acquisition. All phase orchestration,
@@ -318,7 +308,7 @@ def test_primary_orchestrator_runs_real_phases_and_resumes(
     monkeypatch.setattr(
         experiment.datasets, "load_data", lambda **kwargs: FixtureData()
     )
-    monkeypatch.setattr(experiment, "get_base_model", small_backbone)
+    monkeypatch.setattr(experiment, "get_base_model", paper_backbone)
     orchestrator.run_orchestrator(args)
     manifest = next((tmp_path / "campaign").glob("*/manifest.json"))
     output = manifest.parent / "logs/run_default.json"

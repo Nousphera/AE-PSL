@@ -22,8 +22,8 @@ from ae_psl.trainers.implementations.classification.sasl_trainer import SASLTrai
 
 
 def new_ae():
-    return initialize_AE({'ae_type': '2_layer_MLP_(d_d_d_z)', 'ae_latent_dim': 3,
-                          'ae_initialization': 'xavier'}, 8)
+    return initialize_AE({'ae_type': '2_layer_MLP_(d_d_d_z)', 'ae_latent_dim': 64,
+                          'ae_initialization': 'xavier'}, 768)
 
 
 def test_csa_updates_with_default_frozen_dft_and_averages_only_decoders():
@@ -32,8 +32,8 @@ def test_csa_updates_with_default_frozen_dft_and_averages_only_decoders():
     before = [{k: v.clone() for k, v in c.ae_module.state_dict().items()} for c in clients.values()]
     optimizers = {i: torch.optim.Adam(c.ae_module.parameters(), lr=.01) for i, c in clients.items()}
     dummy = torch.optim.Adam([torch.nn.Parameter(torch.ones(1))])
-    batch = {0: (torch.randn(2, 5, 8), torch.zeros(2)),
-             1: (torch.randn(3, 5, 8) + 2, torch.zeros(3))}
+    batch = {0: (torch.randn(1, 50, 768), torch.zeros(1)),
+             1: (torch.randn(2, 50, 768) + 2, torch.zeros(2))}
     _, decoder = SASLTrainer()._single_aggregated_warmup_epoch(
         'cpu', None, dummy, [batch], clients, True, {}, optimizers, 1, 0,
         {'nr_of_clients': 2, 'dataset': 'synthetic', 'concurrent_mse_alignment': False})
@@ -88,11 +88,11 @@ from ae_psl.utils.scheduler_utils import get_optimzer_and_scheduler_for_seperate
 def test_identity_autoencoder_needs_no_ae_optimizer():
     args = {'compression_method':'ae', 'concurrent_mse_alignment':False,
             'start_lr':.001, 'ae_finetune_lr':.001, 'scheduler':'constant',
-            'ae_type':'2_layer_MLP_(d_d_d_z)', 'ae_latent_dim':8}
+            'ae_type':'2_layer_MLP_(d_d_d_z)', 'ae_latent_dim':768}
     class Client(torch.nn.Module):
         def __init__(self):
             super().__init__()
-            self.layer = torch.nn.Linear(8,8)
-            self.ae_module = initialize_AE(args,8)
+            self.register_parameter('weight', torch.nn.Parameter(torch.ones(1)))
+            self.ae_module = initialize_AE(args,768)
     _,_,optimizer,_ = get_optimzer_and_scheduler_for_seperate_ae_finetuning(Client(),args)
     assert optimizer is None

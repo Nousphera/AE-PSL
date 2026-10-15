@@ -62,7 +62,13 @@ Check the installed training stack without downloading datasets or checkpoints:
 ae-psl-smoke --seed 42 --output results/smoke.json
 ```
 
-This runs a real small ViT through general alignment (GA), client-specific alignment (CSA), and distributed fine-tuning (DFT), then saves metrics and model tensors. Existing smoke outputs are preserved; choose another output name to rerun.
+This runs the paper’s full torchvision ViT-B/32 (224×224 input, 12 blocks, width
+768, 12 attention heads), split at layer 5, with rank-16/alpha-32 LoRA and the
+768→768→64 compressor. Weights are explicitly initialized from scratch. Only
+sample and step counts are reduced: two public GA images and three client
+training images exercise GA → CSA → DFT. It validates execution, not pretrained
+accuracy, and needs memory and checkpoint space for the full architecture.
+Existing outputs are preserved; choose another output name to rerun.
 
 After preparing CIFAR-100 and ImageNet100, run a single experiment:
 
@@ -96,13 +102,82 @@ For validation-based checkpoint selection, add
 `--val_mode early_saving --val_split 0.1` to the training command. Validation uses
 training examples only; final test metrics come from the selected checkpoint.
 The campaign's per-job JSON records `best_validation_epoch`, `last_completed_epoch`
-and completion state. [Checkpoint and resume guide](REPRODUCIBILITY.md#results-checkpoints-and-resume).
+and completion state. [Checkpoint handling](#checkpoints-and-resume).
 
 ## Outputs and configuration
 
 The experiment directory contains the effective configuration, per-stage metrics, completion state and saved model checkpoints. Keep these together when comparing runs or resuming a campaign.
 
-[Method and configuration](REPRODUCIBILITY.md) documents the training stages, explicit logit-gradient exchange, communication counts, evaluation and checkpoint handling.
+The method, communication accounting and checkpoint behavior are specified below.
+
+## Method and communication
+
+GA fits the AE to features from a frozen ViT. CSA adapts each local encoder and
+uniformly averages decoder parameters. DFT freezes both AE halves while retaining
+gradients through their inputs. The CLS token and its gradient pass unchanged.
+Global evaluation averages client models and bypasses AE compression; personalized
+evaluation uses local encoders and the shared decoder, then macro-averages clients.
+Reconstruction MSE includes the unchanged CLS token, whose error is zero.
+
+The paper backbone is torchvision ViT-B/32 with `IMAGENET1K_V1` weights. LoRA
+adapts the ViT MLP linear layers; attention Q/K/V and
+`MultiheadAttention.out_proj` are excluded. Rank/alpha default to 16/32. The
+two-layer MLP AE uses LayerNorm, GELU and 0.01 encoder dropout during alignment;
+frozen AEs use evaluation mode during DFT. Alternative compressors retain the
+paper’s ADC, C3-SL and Rand-Top-K comparisons. Unsupported audio and alternate
+vision backbones are not exposed. Pretrained weight errors propagate; the Python
+constructor’s explicit `pretrained=False` option runs the same ViT from scratch.
+
+The single-process simulator exchanges serialized float32 latent patches and CLS
+tokens with shape/dtype headers. The server returns detached logits; clients send
+`(n_client / n_global_batch) × dLoss/dLogits`. One server backward pass produces
+latent/CLS gradients for the retained client graphs. This sample-weighted objective
+handles unequal batches; paper §4.2 writes a sum of client losses.
+
+DFT counters include logit gradients, scalar loss telemetry and message headers.
+Detached backpropagation needs those gradients in addition to the paper’s scalar
+loss upload, so these counters differ in scope from scalar-only communication
+ratios. CSA records raw decoder bytes separately. GA data movement, network framing,
+encryption and model distribution are excluded. `_in_mb` result fields are MiB.
+`server_batch_mse` is a shared-memory diagnostic; a distributed implementation must
+omit it or count its additional traffic. Labels stay in client loss calculations,
+but gradients may reveal them; the simulator supplies no privacy protection.
+
+The standard recipe uses split layer 5, latent dimensions 140/64/24, 30 GA epochs,
+one CSA epoch, ten DFT epochs, Adam at `1e-4`, global batch 125, five or 25 clients,
+and seeds 42/43/44. `d_z=d` means identity compression. CIFAR-100/Food101 preserve
+provider splits. SUN397 uses lexically ordered paths and a seeded 80/20 split,
+which is separate from the official SUN partition protocol. ImageNet100 uses the
+supplied class folders; FEMNIST preserves writer identity. See [data instructions](docs/DATA.md).
+
+## Checkpoints and resume
+
+Campaigns save the effective configuration, per-job JSON, `.status.json`, a dated
+manifest and optional model states. A `completion` record identifies the stage,
+requested epochs, last completed epoch and early-stop state. With
+`--resume_from_manifest PATH`, incomplete jobs restart from the beginning and may
+reuse a compatible GA cache. Results are written atomically; failed jobs return
+an unsuccessful campaign exit.
+
+With held-out validation, `.best.pth` stores the best checkpoint and `.latest.pth`
+the latest epoch. Final testing reloads the best snapshot; `--save_final_model true`
+saves that evaluated state. Personalized checkpoints contain all `client_models`
+and `server_model`; global checkpoints contain `client_model` and `server_model`.
+These are model states, not optimizer resume states. Test accuracy does not select
+checkpoints when validation is disabled (the default).
+
+GA cache schema 4 binds seed, training settings, model hash/split, source root,
+manifest hash and FEMNIST partition identity. Keep prepared data immutable and
+validate hashes after copying it. For unprepared folders, use a fresh cache after
+changing files. Match explicitly selected `--ae_specific_weights_path` checkpoints
+to the experiment configuration.
+
+Tests exercise the complete paper architecture, serialized gradient equivalence,
+frozen backbone/AE behavior, unchanged CLS gradients, local adaptation, global
+and personalized evaluation, dataset/cache integrity, checkpoint selection and
+campaign resume. Full corpus runs and pretrained accuracy remain separate research
+experiments. [constraints-tested.txt](constraints-tested.txt) records the tested
+Python 3.12 CPU environment.
 
 ## Results
 
@@ -124,4 +199,8 @@ Source: [Table 4](https://arxiv.org/pdf/2607.17913v1#page=17).
 
 ## Citation and license
 
-Use [CITATION.cff](CITATION.cff) for the paper citation. See [attribution](PROVENANCE.md) and the [MIT license](LICENSE).
+Use [CITATION.cff](CITATION.cff) for the paper citation and [LICENSE](LICENSE) for
+the project’s MIT terms. Dataset partitioning components adapted from
+[Flower](https://github.com/adap/flower), LoRA components and comparison methods
+retain their inline source references. Third-party code, models and datasets
+retain their respective licenses and access terms.

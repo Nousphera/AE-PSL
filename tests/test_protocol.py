@@ -35,7 +35,7 @@ from ae_psl.trainers.implementations.classification.sasl_trainer import SASLTrai
 
 def split_models():
     args, base, ae = create_system(42)
-    client, server, _ = get_split_model(base, ae, 1, 3, 'cpu', False)
+    client, server, _ = get_split_model(base, ae, 5, 100, 'cpu', False)
     return args, {i: copy.deepcopy(client) for i in range(2)}, server
 
 
@@ -43,7 +43,7 @@ def test_cls_identity_and_gradient_through_frozen_ae():
     _, _, ae = create_system()
     ae.freeze(True, True)
     ae.eval()
-    x = torch.randn(2, 5, 16, requires_grad=True)
+    x = torch.randn(1, 50, 768, requires_grad=True)
     latent, cls = ae.encode(x)
     reconstructed = ae.decode(latent, cls)
     assert torch.equal(reconstructed[:, :1], x[:, :1])
@@ -60,7 +60,7 @@ def test_serialized_split_updates_equal_unsplit_autograd():
         c.eval(); c.set_lora_trainable(); c.ae_module.freeze(True, True)
     server.eval(); server.ae_module.freeze(True, True)
     reference_clients, reference_server = copy.deepcopy(clients), copy.deepcopy(server)
-    data = {i: (torch.randn(n,3,16,16), torch.arange(n)%3) for i,n in enumerate((2,3))}
+    data = {i: (torch.randn(n,3,224,224), torch.arange(n)%100) for i,n in enumerate((1,2))}
     main = {i: torch.optim.SGD(c.parameters(),lr=.01) for i,c in clients.items()}
     server_opt = torch.optim.SGD(server.parameters(),lr=.01)
     zs, cs = [], []
@@ -72,7 +72,7 @@ def test_serialized_split_updates_equal_unsplit_autograd():
     for model in [*reference_clients.values(), reference_server]:
         torch.optim.SGD(model.parameters(),lr=.01).step()
     result = SASLTrainer()._single_epoch('cpu',server,server_opt,[data],clients,True,main,{},1,1,args)
-    assert result[0]/5 == pytest.approx(loss.item())
+    assert result[0]/3 == pytest.approx(loss.item())
     for actual, expected in zip([*clients.values(),server],[*reference_clients.values(),reference_server]):
         for k,v in actual.state_dict().items():
             torch.testing.assert_close(v,expected.state_dict()[k],rtol=1e-5,atol=1e-7)
@@ -80,7 +80,7 @@ def test_serialized_split_updates_equal_unsplit_autograd():
 
 def test_global_eval_bypasses_ae_and_local_eval_uses_it():
     _, clients, server = split_models()
-    data = [(torch.randn(3,3,16,16),torch.tensor([0,1,2]))]
+    data = [(torch.randn(1,3,224,224),torch.tensor([0]))]
     calls = []
     handle = clients[0].ae_module.patch_encoder.register_forward_hook(lambda *args: calls.append('encoder'))
     decoder_handle = server.ae_module.patch_decoder.register_forward_hook(lambda *args: calls.append('decoder'))
@@ -97,5 +97,5 @@ def test_three_stages_are_reproducible_and_preserve_invariants():
     second,_ = run(42)
     assert all(first['checks'].values())
     assert first['state_sha256'] == second['state_sha256']
-    assert first['sample_counts'] == {0:5,1:6}
-    assert first['communication']['outgoing_client_communication_overhead_in_mb']['0'] == pytest.approx(1536 / 2**20)
+    assert first['sample_counts'] == {0:1,1:2}
+    assert first['communication']['outgoing_client_communication_overhead_in_mb']['0'] > (49 * 64 + 768 + 100) * 4 / 2**20

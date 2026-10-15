@@ -17,7 +17,6 @@ test = ["pytest>=8,<10"]
 femnist = ["datasets>=3.6,<4"]
 plots = ["matplotlib>=3.10,<4", "pandas>=2.3,<3"]
 baselines = ["kmeans-pytorch==0.3"]
-dino = ["timm>=1.0,<2"]
 
 [project.scripts]
 ae-psl-smoke = "ae_psl.smoke:main"

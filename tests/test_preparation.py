@@ -113,7 +113,6 @@ def test_femnist_keeps_remainder_and_keys_cache_by_source_and_validation(tmp_pat
 
 @pytest.mark.parametrize("dataset", ["cifar100", "food101", "sun397", "imagenet", "femnist"])
 def test_prepared_images_run_primary_ga_csa_dft(tmp_path, monkeypatch, dataset):
-    from torchvision.models.vision_transformer import VisionTransformer
     from ae_psl import available_datasets, orchestrator
     from ae_psl import main_AE_PSL_global_evaluation as global_experiment
     from ae_psl import main_AE_PSL_local_evaluation as local_experiment
@@ -126,25 +125,18 @@ def test_prepared_images_run_primary_ga_csa_dft(tmp_path, monkeypatch, dataset):
     else:
         prepare_images("imagenet100" if dataset == "imagenet" else dataset, root, image_source(tmp_path / "source"), allow_subset=True)
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(available_datasets, "get_default_vit_transforms", lambda train: transforms.ToTensor())
-    monkeypatch.setattr(available_datasets, "get_vit_mnist_transforms", lambda: transforms.Compose([
-        transforms.Resize((16, 16)), transforms.ToTensor()]))
-
-    def small_backbone(args, device):
+    def paper_backbone(args, device):
         count = {"femnist": 62, "food101": 101, "sun397": 397, "imagenet": 100, "cifar100": 100}[dataset]
-        size = 224 if dataset == "cifar100" else 16
-        backbone = VisionTransformer(image_size=size, patch_size=size // 2, num_layers=2,
-            num_heads=2, hidden_dim=16, mlp_dim=32, num_classes=count)
-        return VisionTransformerBase("vit_b_32", True, 2, 4, count, device, backbone=backbone)
+        return VisionTransformerBase("vit_b_32", True, 16, 32, count, device, pretrained=False)
 
-    monkeypatch.setattr(global_experiment, "get_base_model", small_backbone)
-    monkeypatch.setattr(local_experiment, "get_base_model", small_backbone)
+    monkeypatch.setattr(global_experiment, "get_base_model", paper_backbone)
+    monkeypatch.setattr(local_experiment, "get_base_model", paper_backbone)
     args = orchestrator.setup_orchestrator_parser().parse_args([
         "--dataset", dataset, "--ae_pretrain_dataset", dataset,
         "--torch_data_dir", str(root), "--dataset_split_type", "iid",
-        "--nr_of_epochs", "1", "--ae_pretrain_epochs", "1", "--batch_size", "4",
-        "--ae_pretrain_batch_size", "2", "--nr_of_clients", "2", "--split_layer", "1",
-        "--ae_latent_dim", "4", "--ae_force_retrain", "true", "--femnist_fraction", "1",
+        "--nr_of_epochs", "1", "--ae_pretrain_epochs", "1", "--batch_size", "2",
+        "--ae_pretrain_batch_size", "1", "--nr_of_clients", "2", "--split_layer", "5",
+        "--ae_latent_dim", "64", "--ae_force_retrain", "true", "--femnist_fraction", "1",
         "--num_workers_finetuning", "0", "--num_workers_ae_pretraining", "0",
         "--num_workers_activation_loading", "0", "--test_num_workers", "0",
         "--val_mode", "early_saving", "--val_split", "0.25",

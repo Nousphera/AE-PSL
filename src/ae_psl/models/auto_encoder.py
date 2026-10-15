@@ -526,8 +526,6 @@ class ImageToPatches(nn.Module):
 def get_seq_length_for_model(model_name):
     if model_name == 'vit_b_32':
         return 50
-    elif model_name == 'vit_b_16':
-        return 197
     else:
         raise ValueError(f"Error initializing AE: Unknown model name '{model_name}' for patch size.")
 
